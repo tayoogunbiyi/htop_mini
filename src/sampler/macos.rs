@@ -91,17 +91,6 @@ impl MacOsSampler {
                     nice,
                 });
 
-                let total = user + system + idle + nice;
-
-                if total > 0 {
-                    println!("CPU={}: User={:.2}%, System={:.2}%, Idle={:.2}%, Nice={:.2}%",
-                        i,
-                        (user as f64 / total as f64) * 100.0,
-                        (system as f64 / total as f64) * 100.0,
-                        (idle as f64 / total as f64) * 100.0,
-                        (nice as f64 / total as f64) * 100.0,
-                    );
-                }
             }
 
             vm_deallocate(
