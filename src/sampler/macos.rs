@@ -1,7 +1,7 @@
 #![allow(non_camel_case_types)]
 
 use super::{Sampler, SampleError};
-use crate::model::RawSample;
+use crate::model::{RawSample, CpuTicks};
 
 use std::mem;
 use std::ptr;
@@ -51,13 +51,13 @@ impl MacOsSampler {
         MacOsSampler {}
     }
 
-    fn collect_cpu_info(&mut self) -> Result<(), SampleError> {
+    fn collect_cpu_info(&mut self) -> Result<RawSample, SampleError> {
         unsafe {
             let host = mach_host_self();
             let mut processor_count: natural_t = 0;
             let mut processor_info: processor_info_array_t = ptr::null_mut();
             let mut processor_info_count: mach_msg_type_number_t = 0;
-            
+
             let result = host_processor_info(
                 host,
                 PROCESSOR_CPU_LOAD_INFO,
@@ -69,21 +69,30 @@ impl MacOsSampler {
             if result != 0 {
                 return Err(SampleError::System(result))
             }
-            
+
             let cpu_info = std::slice::from_raw_parts(
                 processor_info,
                 processor_info_count as usize,
             );
-            
+
+            let mut cpu_ticks = Vec::with_capacity(processor_count as usize);
+
             for i in 0..processor_count as usize {
                 let offset = i * CPU_STATE_MAX;
-                let user = cpu_info[offset + CPU_STATE_USER];
-                let system = cpu_info[offset + CPU_STATE_SYSTEM];
-                let idle = cpu_info[offset + CPU_STATE_IDLE];
-                let nice = cpu_info[offset + CPU_STATE_NICE];
-                
+                let user = cpu_info[offset + CPU_STATE_USER] as u32;
+                let system = cpu_info[offset + CPU_STATE_SYSTEM] as u32;
+                let idle = cpu_info[offset + CPU_STATE_IDLE] as u32;
+                let nice = cpu_info[offset + CPU_STATE_NICE] as u32;
+
+                cpu_ticks.push(CpuTicks {
+                    user,
+                    system,
+                    idle,
+                    nice,
+                });
+
                 let total = user + system + idle + nice;
-                
+
                 if total > 0 {
                     println!("CPU={}: User={:.2}%, System={:.2}%, Idle={:.2}%, Nice={:.2}%",
                         i,
@@ -94,20 +103,23 @@ impl MacOsSampler {
                     );
                 }
             }
-                
+
             vm_deallocate(
                 mach_task_self(),
                 processor_info as u64,
                 (processor_info_count * mem::size_of::<i32>() as u32) as u64,
             );
-            Ok(())
+
+            Ok(RawSample {
+                cpu_count: processor_count as usize,
+                cpu_ticks,
+            })
         }
     }
 }
 
 impl Sampler for MacOsSampler {
     fn sample(&mut self) -> Result<RawSample, SampleError> {
-        self.collect_cpu_info()?;
-        Ok(RawSample { })
+        self.collect_cpu_info()
     }
 }
