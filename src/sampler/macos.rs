@@ -1,6 +1,7 @@
 #![allow(non_camel_case_types)]
 
 use super::{Sampler, SampleError};
+use super::kernel_interface::KernelInterface;
 use crate::model::{RawSample, CpuTicks};
 
 use std::mem;
@@ -24,7 +25,7 @@ const CPU_STATE_NICE: usize = 3;
 #[link(name = "System", kind = "framework")]
 unsafe extern "C" {
     fn mach_host_self() -> host_t;
-    
+
     fn host_processor_info(
         host: host_t,
         flavor: host_flavor_t,
@@ -32,26 +33,45 @@ unsafe extern "C" {
         out_processor_info: *mut processor_info_array_t,
         out_processor_info_count: *mut mach_msg_type_number_t,
     ) -> kern_return_t;
-    
+
     fn vm_deallocate(
         target_task: u32,
         address: u64,
         size: u64,
     ) -> kern_return_t;
-    
+
     fn mach_task_self() -> u32;
 }
 
 
 pub struct MacOsSampler {
+    kernel: Box<dyn KernelInterface>,
 }
 
 impl MacOsSampler {
     pub fn new() -> Self {
-        MacOsSampler {}
+        MacOsSampler {
+            kernel: Box::new(MachKernel),
+        }
     }
 
-    fn collect_cpu_info(&mut self) -> Result<RawSample, SampleError> {
+    #[cfg(test)]
+    pub fn new_with_kernel(kernel: Box<dyn KernelInterface>) -> Self {
+        MacOsSampler { kernel }
+    }
+}
+
+impl Sampler for MacOsSampler {
+    fn sample(&mut self) -> Result<RawSample, SampleError> {
+        self.kernel.get_processor_info()
+            .map_err(SampleError::System)
+    }
+}
+
+pub struct MachKernel;
+
+impl KernelInterface for MachKernel {
+    fn get_processor_info(&self) -> Result<RawSample, i32> {
         unsafe {
             let host = mach_host_self();
             let mut processor_count: natural_t = 0;
@@ -67,7 +87,7 @@ impl MacOsSampler {
             );
 
             if result != 0 {
-                return Err(SampleError::System(result))
+                return Err(result);
             }
 
             let cpu_info = std::slice::from_raw_parts(
@@ -90,9 +110,11 @@ impl MacOsSampler {
                     idle,
                     nice,
                 });
-
             }
 
+            // CRITICAL: Must call vm_deallocate to prevent memory leaks
+            // The Mach kernel API allocates memory that must be manually freed
+            // Verify no leaks with: cargo instruments --template Leaks
             vm_deallocate(
                 mach_task_self(),
                 processor_info as u64,
@@ -104,11 +126,5 @@ impl MacOsSampler {
                 cpu_ticks,
             })
         }
-    }
-}
-
-impl Sampler for MacOsSampler {
-    fn sample(&mut self) -> Result<RawSample, SampleError> {
-        self.collect_cpu_info()
     }
 }
