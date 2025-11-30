@@ -38,10 +38,10 @@ impl Snapshot {
                 let delta_idle = curr.idle.wrapping_sub(prev.idle);
                 let delta_nice = curr.nice.wrapping_sub(prev.nice);
 
-                let total_delta = delta_user
-                    .wrapping_add(delta_system)
-                    .wrapping_add(delta_idle)
-                    .wrapping_add(delta_nice);
+                let total_delta = delta_user as u64
+                    + delta_system as u64
+                    + delta_idle as u64
+                    + delta_nice as u64;
 
                 if total_delta > 0 {
                     CpuUsage {
@@ -86,6 +86,7 @@ impl Snapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     fn make_single_cpu_sample(user: u32, system: u32, idle: u32, nice: u32) -> RawSample {
         RawSample {
@@ -265,6 +266,112 @@ mod tests {
                 usage.idle_percent,
                 usage.nice_percent
             );
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn prop_percentages_sum_to_100_or_0(
+            prev_user in 0u32..u32::MAX/2,
+            prev_system in 0u32..u32::MAX/2,
+            prev_idle in 0u32..u32::MAX/2,
+            prev_nice in 0u32..u32::MAX/2,
+            delta_user in 0u32..1_000_000u32,
+            delta_system in 0u32..1_000_000u32,
+            delta_idle in 0u32..1_000_000u32,
+            delta_nice in 0u32..1_000_000u32,
+        ) {
+            let previous = make_single_cpu_sample(prev_user, prev_system, prev_idle, prev_nice);
+            let current = make_single_cpu_sample(
+                prev_user.wrapping_add(delta_user),
+                prev_system.wrapping_add(delta_system),
+                prev_idle.wrapping_add(delta_idle),
+                prev_nice.wrapping_add(delta_nice),
+            );
+
+            let snapshot = Snapshot::compute(&current, &previous);
+            let usage = &snapshot.cpu_usage[0];
+
+            let sum = usage.user_percent + usage.system_percent + usage.idle_percent + usage.nice_percent;
+            prop_assert!(
+                (sum - 100.0).abs() < 0.01 || (sum - 0.0).abs() < 0.01,
+                "Percentages must sum to 100% or 0%, got {}%", sum
+            );
+        }
+
+        #[test]
+        fn prop_all_percentages_in_valid_range(
+            prev_user in 0u32..u32::MAX/2,
+            prev_system in 0u32..u32::MAX/2,
+            prev_idle in 0u32..u32::MAX/2,
+            prev_nice in 0u32..u32::MAX/2,
+            delta_user in 0u32..1_000_000u32,
+            delta_system in 0u32..1_000_000u32,
+            delta_idle in 0u32..1_000_000u32,
+            delta_nice in 0u32..1_000_000u32,
+        ) {
+            let previous = make_single_cpu_sample(prev_user, prev_system, prev_idle, prev_nice);
+            let current = make_single_cpu_sample(
+                prev_user.wrapping_add(delta_user),
+                prev_system.wrapping_add(delta_system),
+                prev_idle.wrapping_add(delta_idle),
+                prev_nice.wrapping_add(delta_nice),
+            );
+
+            let snapshot = Snapshot::compute(&current, &previous);
+            let usage = &snapshot.cpu_usage[0];
+
+            prop_assert!(usage.user_percent >= 0.0 && usage.user_percent <= 100.0);
+            prop_assert!(usage.system_percent >= 0.0 && usage.system_percent <= 100.0);
+            prop_assert!(usage.idle_percent >= 0.0 && usage.idle_percent <= 100.0);
+            prop_assert!(usage.nice_percent >= 0.0 && usage.nice_percent <= 100.0);
+        }
+
+        #[test]
+        fn prop_multi_cpu_percentages_valid(
+            cpu_count in 1usize..=16,
+            prev_ticks in prop::collection::vec(
+                (0u32..u32::MAX/2, 0u32..u32::MAX/2, 0u32..u32::MAX/2, 0u32..u32::MAX/2),
+                1..=16
+            ),
+            deltas in prop::collection::vec(
+                (0u32..1_000_000u32, 0u32..1_000_000u32, 0u32..1_000_000u32, 0u32..1_000_000u32),
+                1..=16
+            )
+        ) {
+            let len = cpu_count.min(prev_ticks.len()).min(deltas.len());
+            let prev_arr: Vec<[u32; 4]> = prev_ticks[..len].iter()
+                .map(|(u, s, i, n)| [*u, *s, *i, *n])
+                .collect();
+            let curr_arr: Vec<[u32; 4]> = prev_ticks[..len].iter()
+                .zip(deltas[..len].iter())
+                .map(|((u, s, i, n), (du, ds, di, dn))| [
+                    u.wrapping_add(*du),
+                    s.wrapping_add(*ds),
+                    i.wrapping_add(*di),
+                    n.wrapping_add(*dn),
+                ])
+                .collect();
+
+            let previous = make_sample(len, prev_arr);
+            let current = make_sample(len, curr_arr);
+
+            let snapshot = Snapshot::compute(&current, &previous);
+
+            prop_assert_eq!(snapshot.cpu_usage.len(), len);
+
+            for usage in &snapshot.cpu_usage {
+                let sum = usage.user_percent + usage.system_percent + usage.idle_percent + usage.nice_percent;
+                prop_assert!(
+                    (sum - 100.0).abs() < 0.01 || (sum - 0.0).abs() < 0.01,
+                    "Percentages must sum to 100% or 0%, got {}%", sum
+                );
+
+                prop_assert!(usage.user_percent >= 0.0 && usage.user_percent <= 100.0);
+                prop_assert!(usage.system_percent >= 0.0 && usage.system_percent <= 100.0);
+                prop_assert!(usage.idle_percent >= 0.0 && usage.idle_percent <= 100.0);
+                prop_assert!(usage.nice_percent >= 0.0 && usage.nice_percent <= 100.0);
+            }
         }
     }
 }
