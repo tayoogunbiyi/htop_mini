@@ -58,6 +58,8 @@ The following modules are placeholders for future development:
 ## Important Notes
 
 - This project uses Cargo edition 2024
-- The `RawSample` struct in model.rs is currently empty and needs to be populated with actual metrics
-- macOS implementation is functional but incomplete (data not stored in RawSample)
-- Linux implementation is not yet started
+
+## Coding style
+- Avoid OBVIOUS comments.
+
+
