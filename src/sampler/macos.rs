@@ -54,11 +54,6 @@ impl MacOsSampler {
             kernel: Box::new(MachKernel),
         }
     }
-
-    #[cfg(test)]
-    pub fn new_with_kernel(kernel: Box<dyn KernelInterface>) -> Self {
-        MacOsSampler { kernel }
-    }
 }
 
 impl Sampler for MacOsSampler {

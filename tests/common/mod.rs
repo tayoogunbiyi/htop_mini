@@ -1,6 +1,3 @@
-
-pub mod mock_kernel;
-
 use htop_mini::model::{RawSample, CpuTicks};
 
 pub fn make_single_cpu_sample(user: u32, system: u32, idle: u32, nice: u32) -> RawSample {
