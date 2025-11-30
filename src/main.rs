@@ -10,17 +10,9 @@ const SAMPLE_INTERVAL_SECS: u64 = 2;
 
 fn main() {
     let mut sampler = Sampler::new();
+    let mut previous_sample = None;
 
-    let mut previous_sample = match sampler.sample() {
-        Ok(sample) => sample,
-        Err(e) => {
-            eprintln!("Error taking initial sample: {:?}", e);
-            return;
-        }
-    };
-
-    println!("Collected initial sample. Starting monitoring loop...\n");
-    thread::sleep(Duration::from_secs(SAMPLE_INTERVAL_SECS));
+    println!("Starting monitoring loop...\n");
 
     loop {
         let current_sample = match sampler.sample() {
@@ -32,12 +24,12 @@ fn main() {
             }
         };
 
-        let snapshot = Snapshot::compute(&current_sample, &previous_sample);
+        if let Some(prev) = previous_sample {
+            let snapshot = Snapshot::compute(&current_sample, &prev);
+            snapshot.render();
+        }
 
-        previous_sample = current_sample;
-
-        snapshot.render();
-
+        previous_sample = Some(current_sample);
         thread::sleep(Duration::from_secs(SAMPLE_INTERVAL_SECS));
     }
 }
