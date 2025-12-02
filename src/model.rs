@@ -2,6 +2,8 @@
 pub struct RawSample {
     pub cpu_count: usize,
     pub cpu_ticks: Vec<CpuTicks>,
+    pub boot_info: BootInfo,
+    pub load_average: LoadAverage,
 }
 
 #[derive(Debug, Clone)]
@@ -13,9 +15,48 @@ pub struct CpuTicks {
 }
 
 #[derive(Debug, Clone)]
+pub struct BootInfo {
+    pub boot_time_secs: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LoadAverage {
+    pub one_min: f64,
+    pub five_min: f64,
+    pub fifteen_min: f64,
+}
+
+#[derive(Debug, Clone)]
 pub struct Snapshot {
     pub cpu_count: usize,
     pub cpu_usage: Vec<CpuUsage>,
+    pub uptime: Uptime,
+    pub load_average: LoadAverage,
+}
+
+#[derive(Debug, Clone)]
+pub struct Uptime {
+    total_seconds: u64,
+    pub days: u64,
+    pub hours: u64,
+    pub minutes: u64,
+    pub seconds: u64,
+}
+
+impl Uptime {
+    pub fn from_seconds(total_seconds: u64) -> Self {
+        Self {
+            total_seconds,
+            days: total_seconds / 86400,
+            hours: (total_seconds % 86400) / 3600,
+            minutes: (total_seconds % 3600) / 60,
+            seconds: total_seconds % 60,
+        }
+    }
+
+    pub fn total_seconds(&self) -> u64 {
+        self.total_seconds
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -30,7 +71,9 @@ impl Snapshot {
     pub fn compute(current: &RawSample, previous: &RawSample) -> Self {
         assert_eq!(current.cpu_count, previous.cpu_count, "CPU count mismatch");
 
-        let cpu_usage: Vec<CpuUsage> = current.cpu_ticks.iter()
+        let cpu_usage: Vec<CpuUsage> = current
+            .cpu_ticks
+            .iter()
             .zip(previous.cpu_ticks.iter())
             .map(|(curr, prev)| {
                 let delta_user = curr.user.wrapping_sub(prev.user);
@@ -38,10 +81,8 @@ impl Snapshot {
                 let delta_idle = curr.idle.wrapping_sub(prev.idle);
                 let delta_nice = curr.nice.wrapping_sub(prev.nice);
 
-                let total_delta = delta_user as u64
-                    + delta_system as u64
-                    + delta_idle as u64
-                    + delta_nice as u64;
+                let total_delta =
+                    delta_user as u64 + delta_system as u64 + delta_idle as u64 + delta_nice as u64;
 
                 if total_delta > 0 {
                     CpuUsage {
@@ -61,22 +102,40 @@ impl Snapshot {
             })
             .collect();
 
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let uptime_secs = now - current.boot_info.boot_time_secs;
+
+        let uptime = Uptime::from_seconds(uptime_secs);
+
         Snapshot {
             cpu_count: current.cpu_count,
             cpu_usage,
+            uptime,
+            load_average: current.load_average,
         }
     }
 
     pub fn render(&self) {
-        println!("\n=== CPU Usage Snapshot ===");
+        println!("\n=== System Monitor ===");
+        println!(
+            "Uptime: {}d {:02}h:{:02}m:{:02}s  Load: {:.2} {:.2} {:.2}",
+            self.uptime.days,
+            self.uptime.hours,
+            self.uptime.minutes,
+            self.uptime.seconds,
+            self.load_average.one_min,
+            self.load_average.five_min,
+            self.load_average.fifteen_min
+        );
+        println!();
+
         for (i, cpu) in self.cpu_usage.iter().enumerate() {
             println!(
                 "CPU {:2}: User={:5.2}%, System={:5.2}%, Idle={:5.2}%, Nice={:5.2}%",
-                i,
-                cpu.user_percent,
-                cpu.system_percent,
-                cpu.idle_percent,
-                cpu.nice_percent
+                i, cpu.user_percent, cpu.system_percent, cpu.idle_percent, cpu.nice_percent
             );
         }
         println!("=========================\n");
@@ -91,19 +150,43 @@ mod tests {
     fn make_single_cpu_sample(user: u32, system: u32, idle: u32, nice: u32) -> RawSample {
         RawSample {
             cpu_count: 1,
-            cpu_ticks: vec![CpuTicks { user, system, idle, nice }],
+            cpu_ticks: vec![CpuTicks {
+                user,
+                system,
+                idle,
+                nice,
+            }],
+            boot_info: BootInfo {
+                boot_time_secs: 1000000,
+            },
+            load_average: LoadAverage {
+                one_min: 1.0,
+                five_min: 1.5,
+                fifteen_min: 2.0,
+            },
         }
     }
 
     fn make_sample(cpu_count: usize, ticks: Vec<[u32; 4]>) -> RawSample {
         RawSample {
             cpu_count,
-            cpu_ticks: ticks.iter().map(|[u, s, i, n]| CpuTicks {
-                user: *u,
-                system: *s,
-                idle: *i,
-                nice: *n,
-            }).collect(),
+            cpu_ticks: ticks
+                .iter()
+                .map(|[u, s, i, n]| CpuTicks {
+                    user: *u,
+                    system: *s,
+                    idle: *i,
+                    nice: *n,
+                })
+                .collect(),
+            boot_info: BootInfo {
+                boot_time_secs: 1000000,
+            },
+            load_average: LoadAverage {
+                one_min: 1.0,
+                five_min: 1.5,
+                fifteen_min: 2.0,
+            },
         }
     }
 
@@ -115,7 +198,13 @@ mod tests {
 
     fn assert_float_eq(a: f64, b: f64, epsilon: f64) {
         let diff = (a - b).abs();
-        assert!(diff < epsilon, "Expected {} to be approximately equal to {} (diff: {})", a, b, diff);
+        assert!(
+            diff < epsilon,
+            "Expected {} to be approximately equal to {} (diff: {})",
+            a,
+            b,
+            diff
+        );
     }
 
     fn assert_percentages_valid(user: f64, system: f64, idle: f64, nice: f64) {
@@ -139,7 +228,7 @@ mod tests {
             usage.user_percent,
             usage.system_percent,
             usage.idle_percent,
-            usage.nice_percent
+            usage.nice_percent,
         );
     }
 
@@ -158,7 +247,7 @@ mod tests {
             usage.user_percent,
             usage.system_percent,
             usage.idle_percent,
-            usage.nice_percent
+            usage.nice_percent,
         );
     }
 
@@ -177,18 +266,24 @@ mod tests {
 
     #[test]
     fn test_snapshot_compute_multiple_cpus() {
-        let previous = make_sample(4, vec![
-            [1000, 500, 8500, 0],
-            [2000, 1000, 7000, 0],
-            [1500, 750, 7750, 0],
-            [3000, 1500, 5500, 0],
-        ]);
-        let current = make_sample(4, vec![
-            [1100, 600, 8800, 0],
-            [2200, 1200, 7600, 0],
-            [1600, 850, 8050, 0],
-            [3300, 1800, 6400, 0],
-        ]);
+        let previous = make_sample(
+            4,
+            vec![
+                [1000, 500, 8500, 0],
+                [2000, 1000, 7000, 0],
+                [1500, 750, 7750, 0],
+                [3000, 1500, 5500, 0],
+            ],
+        );
+        let current = make_sample(
+            4,
+            vec![
+                [1100, 600, 8800, 0],
+                [2200, 1200, 7600, 0],
+                [1600, 850, 8050, 0],
+                [3300, 1800, 6400, 0],
+            ],
+        );
 
         let snapshot = Snapshot::compute(&current, &previous);
 
@@ -198,7 +293,7 @@ mod tests {
                 usage.user_percent,
                 usage.system_percent,
                 usage.idle_percent,
-                usage.nice_percent
+                usage.nice_percent,
             );
         }
     }
@@ -207,12 +302,15 @@ mod tests {
     #[should_panic(expected = "CPU count mismatch")]
     fn test_snapshot_compute_cpu_count_mismatch_panics() {
         let previous = make_sample(2, vec![[1000, 500, 8500, 0], [1000, 500, 8500, 0]]);
-        let current = make_sample(4, vec![
-            [1100, 600, 8300, 0],
-            [1100, 600, 8300, 0],
-            [1100, 600, 8300, 0],
-            [1100, 600, 8300, 0],
-        ]);
+        let current = make_sample(
+            4,
+            vec![
+                [1100, 600, 8300, 0],
+                [1100, 600, 8300, 0],
+                [1100, 600, 8300, 0],
+                [1100, 600, 8300, 0],
+            ],
+        );
 
         Snapshot::compute(&current, &previous);
     }
@@ -233,38 +331,60 @@ mod tests {
 
     #[test]
     fn test_snapshot_compute_multi_cpu_wraparound() {
-        let previous = make_sample(4, vec![
-            [1000, 500, 8500, 0],
-            [u32::MAX - 100, 200, 100, 0],
-            [500, u32::MAX - 50, 8500, 0],
-            [1500, 750, u32::MAX - 200, 0],
-        ]);
-        let current = make_sample(4, vec![
-            [1100, 600, 8700, 0],
-            [150, 300, 200, 0],
-            [600, 100, 8600, 0],
-            [1600, 850, 150, 0],
-        ]);
+        let previous = make_sample(
+            4,
+            vec![
+                [1000, 500, 8500, 0],
+                [u32::MAX - 100, 200, 100, 0],
+                [500, u32::MAX - 50, 8500, 0],
+                [1500, 750, u32::MAX - 200, 0],
+            ],
+        );
+        let current = make_sample(
+            4,
+            vec![
+                [1100, 600, 8700, 0],
+                [150, 300, 200, 0],
+                [600, 100, 8600, 0],
+                [1600, 850, 150, 0],
+            ],
+        );
 
         let snapshot = Snapshot::compute(&current, &previous);
 
         assert_eq!(snapshot.cpu_usage.len(), 4);
 
         for (i, usage) in snapshot.cpu_usage.iter().enumerate() {
-            assert!(usage.user_percent >= 0.0 && usage.user_percent <= 100.0,
-                "CPU {} user_percent out of range: {}", i, usage.user_percent);
-            assert!(usage.system_percent >= 0.0 && usage.system_percent <= 100.0,
-                "CPU {} system_percent out of range: {}", i, usage.system_percent);
-            assert!(usage.idle_percent >= 0.0 && usage.idle_percent <= 100.0,
-                "CPU {} idle_percent out of range: {}", i, usage.idle_percent);
-            assert!(usage.nice_percent >= 0.0 && usage.nice_percent <= 100.0,
-                "CPU {} nice_percent out of range: {}", i, usage.nice_percent);
+            assert!(
+                usage.user_percent >= 0.0 && usage.user_percent <= 100.0,
+                "CPU {} user_percent out of range: {}",
+                i,
+                usage.user_percent
+            );
+            assert!(
+                usage.system_percent >= 0.0 && usage.system_percent <= 100.0,
+                "CPU {} system_percent out of range: {}",
+                i,
+                usage.system_percent
+            );
+            assert!(
+                usage.idle_percent >= 0.0 && usage.idle_percent <= 100.0,
+                "CPU {} idle_percent out of range: {}",
+                i,
+                usage.idle_percent
+            );
+            assert!(
+                usage.nice_percent >= 0.0 && usage.nice_percent <= 100.0,
+                "CPU {} nice_percent out of range: {}",
+                i,
+                usage.nice_percent
+            );
 
             assert_percentages_valid(
                 usage.user_percent,
                 usage.system_percent,
                 usage.idle_percent,
-                usage.nice_percent
+                usage.nice_percent,
             );
         }
     }

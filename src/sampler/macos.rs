@@ -1,7 +1,7 @@
 #![allow(non_camel_case_types)]
 use super::kernel_interface::KernelInterface;
 use super::{SampleError, Sampler};
-use crate::model::{CpuTicks, RawSample};
+use crate::model::{CpuTicks, RawSample, BootInfo, LoadAverage};
 
 use std::mem;
 use std::ptr;
@@ -12,6 +12,8 @@ use mach::port::mach_port_t;
 use mach::traps::mach_task_self;
 use mach::vm::mach_vm_deallocate;
 use mach::vm_types::{mach_vm_address_t, mach_vm_size_t, natural_t};
+
+use libc::{c_void, getloadavg, sysctl, timeval, CTL_KERN, KERN_BOOTTIME};
 
 type host_t = mach_port_t;
 type host_flavor_t = i32;
@@ -107,9 +109,56 @@ impl KernelInterface for MachKernel {
                 (processor_info_count * mem::size_of::<i32>() as u32) as mach_vm_size_t,
             );
 
+            let boot_info = self.get_boot_info()?;
+            let load_average = self.get_load_average()?;
+
             Ok(RawSample {
                 cpu_count: processor_count as usize,
                 cpu_ticks,
+                boot_info,
+                load_average,
+            })
+        }
+    }
+
+    fn get_boot_info(&self) -> Result<BootInfo, i32> {
+        unsafe {
+            let mut boottime: timeval = mem::zeroed();
+            let mut len = mem::size_of::<timeval>();
+            let mut mib = [CTL_KERN, KERN_BOOTTIME];
+
+            let result = sysctl(
+                mib.as_mut_ptr(),
+                2,
+                &mut boottime as *mut _ as *mut c_void,
+                &mut len,
+                ptr::null_mut(),
+                0,
+            );
+
+            if result != 0 {
+                return Err(result);
+            }
+
+            Ok(BootInfo {
+                boot_time_secs: boottime.tv_sec as u64,
+            })
+        }
+    }
+
+    fn get_load_average(&self) -> Result<LoadAverage, i32> {
+        unsafe {
+            let mut loadavg = [0.0f64; 3];
+            let result = getloadavg(loadavg.as_mut_ptr(), 3);
+
+            if result != 3 {
+                return Err(-1);
+            }
+
+            Ok(LoadAverage {
+                one_min: loadavg[0],
+                five_min: loadavg[1],
+                fifteen_min: loadavg[2],
             })
         }
     }

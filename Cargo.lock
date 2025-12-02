@@ -73,6 +73,7 @@ dependencies = [
 name = "htop_mini"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "mach",
  "proptest",
  "thiserror",
