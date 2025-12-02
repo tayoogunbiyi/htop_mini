@@ -25,41 +25,9 @@ cargo test test_name
 cargo build --release
 ```
 
-## Architecture
-
-### Platform Abstraction Pattern
-
-The codebase uses Rust's conditional compilation to provide platform-specific implementations:
-
-- **src/sampler.rs**: Defines the `Sampler` trait and uses `#[cfg(target_os = "...")]` to export the appropriate platform implementation as `PlatformSampler`
-- **src/sampler/macos.rs**: macOS implementation using Mach kernel FFI calls
-- **src/sampler/linux.rs**: Linux implementation (currently a stub)
-
-### Main Sampling Loop
-
-The main loop (src/main.rs) creates a platform-specific sampler and calls `sample()` every 2 seconds (configurable via `SAMPLE_INTERVAL_SECS`).
-
-### macOS Kernel Integration
-
-The macOS sampler uses FFI to call Mach kernel APIs directly:
-- `host_processor_info()` retrieves per-CPU load statistics
-- Returns arrays of CPU state information (user, system, idle, nice)
-- Memory must be manually deallocated using `vm_deallocate()` to prevent leaks
-
-Current implementation prints CPU percentages but doesn't populate the `RawSample` struct yet.
-
-### Planned Components
-
-The following modules are placeholders for future development:
-- **collector.rs**: Will handle data collection orchestration
-- **store.rs**: Will store historical samples
-- **ui.rs**: Will handle terminal UI display
-
 ## Important Notes
-
 - This project uses Cargo edition 2024
-
-## Coding style
-- Avoid OBVIOUS comments.
+- Avoid OBVIOUS comments when writing code
+- When writing a plan for a feature, write it to the /tmp directory in a file named <feature_name>.plan
 
 
