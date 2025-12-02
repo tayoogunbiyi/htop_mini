@@ -4,6 +4,7 @@ pub struct RawSample {
     pub cpu_ticks: Vec<CpuTicks>,
     pub boot_info: BootInfo,
     pub load_average: LoadAverage,
+    pub memory_stats: MemoryStats,
 }
 
 #[derive(Debug, Clone)]
@@ -26,12 +27,83 @@ pub struct LoadAverage {
     pub fifteen_min: f64,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct MemoryStats {
+    pub total_memory_bytes: u64,
+    pub active_bytes: u64,
+    pub inactive_bytes: u64,
+    pub wired_bytes: u64,
+    pub compressed_bytes: u64,
+    pub free_bytes: u64,
+    pub purgeable_bytes: u64,
+    pub page_size: u64,
+    pub swap_total_bytes: u64,
+    pub swap_used_bytes: u64,
+}
+
+const BYTES_PER_GB: f64 = 1_073_741_824.0;
+
+impl MemoryStats {
+    pub fn used_bytes(&self) -> u64 {
+        self.active_bytes + self.wired_bytes + self.compressed_bytes
+    }
+
+    pub fn available_bytes(&self) -> u64 {
+        self.free_bytes + self.inactive_bytes
+    }
+
+    pub fn total_gb(&self) -> f64 {
+        self.total_memory_bytes as f64 / BYTES_PER_GB
+    }
+
+    pub fn used_gb(&self) -> f64 {
+        self.used_bytes() as f64 / BYTES_PER_GB
+    }
+
+    pub fn available_gb(&self) -> f64 {
+        self.available_bytes() as f64 / BYTES_PER_GB
+    }
+
+    pub fn used_percent(&self) -> f64 {
+        (self.used_bytes() as f64 / self.total_memory_bytes as f64) * 100.0
+    }
+
+    pub fn active_percent(&self) -> f64 {
+        (self.active_bytes as f64 / self.total_memory_bytes as f64) * 100.0
+    }
+
+    pub fn wired_percent(&self) -> f64 {
+        (self.wired_bytes as f64 / self.total_memory_bytes as f64) * 100.0
+    }
+
+    pub fn compressed_percent(&self) -> f64 {
+        (self.compressed_bytes as f64 / self.total_memory_bytes as f64) * 100.0
+    }
+
+    pub fn swap_total_gb(&self) -> f64 {
+        self.swap_total_bytes as f64 / BYTES_PER_GB
+    }
+
+    pub fn swap_used_gb(&self) -> f64 {
+        self.swap_used_bytes as f64 / BYTES_PER_GB
+    }
+
+    pub fn swap_used_percent(&self) -> f64 {
+        if self.swap_total_bytes > 0 {
+            (self.swap_used_bytes as f64 / self.swap_total_bytes as f64) * 100.0
+        } else {
+            0.0
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Snapshot {
     pub cpu_count: usize,
     pub cpu_usage: Vec<CpuUsage>,
     pub uptime: Uptime,
     pub load_average: LoadAverage,
+    pub memory_stats: MemoryStats,
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +187,7 @@ impl Snapshot {
             cpu_usage,
             uptime,
             load_average: current.load_average,
+            memory_stats: current.memory_stats,
         }
     }
 
@@ -132,6 +205,28 @@ impl Snapshot {
         );
         println!();
 
+        println!(
+            "Memory: {:.2}G / {:.2}G ({:.1}%) - Active: {:.1}%, Wired: {:.1}%, Compressed: {:.1}%",
+            self.memory_stats.used_gb(),
+            self.memory_stats.total_gb(),
+            self.memory_stats.used_percent(),
+            self.memory_stats.active_percent(),
+            self.memory_stats.wired_percent(),
+            self.memory_stats.compressed_percent()
+        );
+
+        if self.memory_stats.swap_total_bytes > 0 {
+            println!(
+                "Swap:   {:.2}G / {:.2}G ({:.1}%)",
+                self.memory_stats.swap_used_gb(),
+                self.memory_stats.swap_total_gb(),
+                self.memory_stats.swap_used_percent()
+            );
+        } else {
+            println!("Swap:   No swap configured");
+        }
+        println!();
+
         for (i, cpu) in self.cpu_usage.iter().enumerate() {
             println!(
                 "CPU {:2}: User={:5.2}%, System={:5.2}%, Idle={:5.2}%, Nice={:5.2}%",
@@ -146,6 +241,21 @@ impl Snapshot {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    fn make_memory_stats() -> MemoryStats {
+        MemoryStats {
+            total_memory_bytes: 16 * 1024 * 1024 * 1024,
+            active_bytes: 4 * 1024 * 1024 * 1024,
+            inactive_bytes: 2 * 1024 * 1024 * 1024,
+            wired_bytes: 1 * 1024 * 1024 * 1024,
+            compressed_bytes: 512 * 1024 * 1024,
+            free_bytes: 8 * 1024 * 1024 * 1024,
+            purgeable_bytes: 100 * 1024 * 1024,
+            page_size: 16384,
+            swap_total_bytes: 0,
+            swap_used_bytes: 0,
+        }
+    }
 
     fn make_single_cpu_sample(user: u32, system: u32, idle: u32, nice: u32) -> RawSample {
         RawSample {
@@ -164,6 +274,7 @@ mod tests {
                 five_min: 1.5,
                 fifteen_min: 2.0,
             },
+            memory_stats: make_memory_stats(),
         }
     }
 
@@ -187,6 +298,7 @@ mod tests {
                 five_min: 1.5,
                 fifteen_min: 2.0,
             },
+            memory_stats: make_memory_stats(),
         }
     }
 
