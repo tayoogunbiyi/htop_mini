@@ -274,7 +274,7 @@ impl KernelInterface for MachKernel {
                 active_bytes: vm_stats.active_count as u64 * page_size as u64,
                 inactive_bytes: vm_stats.inactive_count as u64 * page_size as u64,
                 wired_bytes: vm_stats.wire_count as u64 * page_size as u64,
-                compressed_bytes: vm_stats.compressor_page_count as u64 * page_size as u64,
+                compressed_bytes: vm_stats.total_uncompressed_pages_in_compressor * page_size as u64,
                 free_bytes: vm_stats.free_count as u64 * page_size as u64,
                 purgeable_bytes: vm_stats.purgeable_count as u64 * page_size as u64,
                 page_size: page_size as u64,
