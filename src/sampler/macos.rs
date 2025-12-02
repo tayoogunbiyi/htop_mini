@@ -1,19 +1,21 @@
 #![allow(non_camel_case_types)]
-
-use super::{Sampler, SampleError};
 use super::kernel_interface::KernelInterface;
-use crate::model::{RawSample, CpuTicks};
+use super::{SampleError, Sampler};
+use crate::model::{CpuTicks, RawSample};
 
 use std::mem;
 use std::ptr;
 
+use mach::kern_return::kern_return_t;
+use mach::message::mach_msg_type_number_t;
+use mach::port::mach_port_t;
+use mach::traps::mach_task_self;
+use mach::vm::mach_vm_deallocate;
+use mach::vm_types::{mach_vm_address_t, mach_vm_size_t, natural_t};
 
-type kern_return_t = i32;
-type host_t = u32;
+type host_t = mach_port_t;
 type host_flavor_t = i32;
-type natural_t = u32;
 type processor_info_array_t = *mut i32;
-type mach_msg_type_number_t = u32;
 
 const PROCESSOR_CPU_LOAD_INFO: host_flavor_t = 2;
 const CPU_STATE_MAX: usize = 4;
@@ -22,7 +24,6 @@ const CPU_STATE_SYSTEM: usize = 1;
 const CPU_STATE_IDLE: usize = 2;
 const CPU_STATE_NICE: usize = 3;
 
-#[link(name = "System", kind = "framework")]
 unsafe extern "C" {
     fn mach_host_self() -> host_t;
 
@@ -33,16 +34,7 @@ unsafe extern "C" {
         out_processor_info: *mut processor_info_array_t,
         out_processor_info_count: *mut mach_msg_type_number_t,
     ) -> kern_return_t;
-
-    fn vm_deallocate(
-        target_task: u32,
-        address: u64,
-        size: u64,
-    ) -> kern_return_t;
-
-    fn mach_task_self() -> u32;
 }
-
 
 pub struct MacOsSampler {
     kernel: Box<dyn KernelInterface>,
@@ -58,7 +50,8 @@ impl MacOsSampler {
 
 impl Sampler for MacOsSampler {
     fn sample(&mut self) -> Result<RawSample, SampleError> {
-        self.kernel.get_processor_info()
+        self.kernel
+            .get_processor_info()
             .map_err(SampleError::System)
     }
 }
@@ -85,10 +78,8 @@ impl KernelInterface for MachKernel {
                 return Err(result);
             }
 
-            let cpu_info = std::slice::from_raw_parts(
-                processor_info,
-                processor_info_count as usize,
-            );
+            let cpu_info =
+                std::slice::from_raw_parts(processor_info, processor_info_count as usize);
 
             let mut cpu_ticks = Vec::with_capacity(processor_count as usize);
 
@@ -107,13 +98,13 @@ impl KernelInterface for MachKernel {
                 });
             }
 
-            // CRITICAL: Must call vm_deallocate to prevent memory leaks
+            // CRITICAL: Must call mach_vm_deallocate to prevent memory leaks
             // The Mach kernel API allocates memory that must be manually freed
             // Verify no leaks with: cargo instruments --template Leaks
-            vm_deallocate(
+            mach_vm_deallocate(
                 mach_task_self(),
-                processor_info as u64,
-                (processor_info_count * mem::size_of::<i32>() as u32) as u64,
+                processor_info as mach_vm_address_t,
+                (processor_info_count * mem::size_of::<i32>() as u32) as mach_vm_size_t,
             );
 
             Ok(RawSample {
