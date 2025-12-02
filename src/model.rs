@@ -48,10 +48,6 @@ impl MemoryStats {
         self.active_bytes + self.wired_bytes + self.compressed_bytes
     }
 
-    pub fn available_bytes(&self) -> u64 {
-        self.free_bytes + self.inactive_bytes
-    }
-
     pub fn total_gb(&self) -> f64 {
         self.total_memory_bytes as f64 / BYTES_PER_GB
     }
@@ -60,24 +56,20 @@ impl MemoryStats {
         self.used_bytes() as f64 / BYTES_PER_GB
     }
 
-    pub fn available_gb(&self) -> f64 {
-        self.available_bytes() as f64 / BYTES_PER_GB
-    }
-
     pub fn used_percent(&self) -> f64 {
         (self.used_bytes() as f64 / self.total_memory_bytes as f64) * 100.0
     }
 
-    pub fn active_percent(&self) -> f64 {
-        (self.active_bytes as f64 / self.total_memory_bytes as f64) * 100.0
+    pub fn active_gb(&self) -> f64 {
+        self.active_bytes as f64 / BYTES_PER_GB
     }
 
-    pub fn wired_percent(&self) -> f64 {
-        (self.wired_bytes as f64 / self.total_memory_bytes as f64) * 100.0
+    pub fn wired_gb(&self) -> f64 {
+        self.wired_bytes as f64 / BYTES_PER_GB
     }
 
-    pub fn compressed_percent(&self) -> f64 {
-        (self.compressed_bytes as f64 / self.total_memory_bytes as f64) * 100.0
+    pub fn compressed_gb(&self) -> f64 {
+        self.compressed_bytes as f64 / BYTES_PER_GB
     }
 
     pub fn swap_total_gb(&self) -> f64 {
@@ -206,13 +198,13 @@ impl Snapshot {
         println!();
 
         println!(
-            "Memory: {:.2}G / {:.2}G ({:.1}%) - Active: {:.1}%, Wired: {:.1}%, Compressed: {:.1}%",
+            "Memory: {:.2}G / {:.2}G ({:.1}%) - Active: {:.2}G, Wired: {:.2}G, Compressed: {:.2}G",
             self.memory_stats.used_gb(),
             self.memory_stats.total_gb(),
             self.memory_stats.used_percent(),
-            self.memory_stats.active_percent(),
-            self.memory_stats.wired_percent(),
-            self.memory_stats.compressed_percent()
+            self.memory_stats.active_gb(),
+            self.memory_stats.wired_gb(),
+            self.memory_stats.compressed_gb()
         );
 
         if self.memory_stats.swap_total_bytes > 0 {
