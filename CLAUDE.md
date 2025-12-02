@@ -28,6 +28,6 @@ cargo build --release
 ## Important Notes
 - This project uses Cargo edition 2024
 - Avoid OBVIOUS comments when writing code
-- When writing a plan for a feature, write it to the /tmp directory in a file named <feature_name>.plan
+- When writing a plan for a feature, write it to the current directory's .claude directory in a file named <feature_name>.plan.md
 
 
