@@ -5,6 +5,14 @@ pub struct RawSample {
     pub boot_info: BootInfo,
     pub load_average: LoadAverage,
     pub memory_stats: MemoryStats,
+    pub task_stats: TaskStats,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TaskStats {
+    pub total_tasks: u32,
+    pub total_threads: u32,
+    pub running_threads: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +104,7 @@ pub struct Snapshot {
     pub uptime: Uptime,
     pub load_average: LoadAverage,
     pub memory_stats: MemoryStats,
+    pub task_stats: TaskStats,
 }
 
 #[derive(Debug, Clone)]
@@ -180,11 +189,18 @@ impl Snapshot {
             uptime,
             load_average: current.load_average,
             memory_stats: current.memory_stats,
+            task_stats: current.task_stats,
         }
     }
 
     pub fn render(&self) {
         println!("\n=== System Monitor ===");
+        println!(
+            "Tasks: {}, {} thr; {} running",
+            self.task_stats.total_tasks,
+            self.task_stats.total_threads,
+            self.task_stats.running_threads
+        );
         println!(
             "Uptime: {}d {:02}h:{:02}m:{:02}s  Load: {:.2} {:.2} {:.2}",
             self.uptime.days,
@@ -267,6 +283,7 @@ mod tests {
                 fifteen_min: 2.0,
             },
             memory_stats: make_memory_stats(),
+            task_stats: TaskStats::default(),
         }
     }
 
@@ -291,6 +308,7 @@ mod tests {
                 fifteen_min: 2.0,
             },
             memory_stats: make_memory_stats(),
+            task_stats: TaskStats::default(),
         }
     }
 
@@ -596,6 +614,58 @@ mod tests {
                 prop_assert!(usage.idle_percent >= 0.0 && usage.idle_percent <= 100.0);
                 prop_assert!(usage.nice_percent >= 0.0 && usage.nice_percent <= 100.0);
             }
+        }
+    }
+
+    #[test]
+    fn test_task_stats_default() {
+        let task_stats = TaskStats::default();
+        assert_eq!(task_stats.total_tasks, 0);
+        assert_eq!(task_stats.total_threads, 0);
+        assert_eq!(task_stats.running_threads, 0);
+    }
+
+    #[test]
+    fn test_snapshot_passes_through_task_stats() {
+        let previous = make_single_cpu_sample(1000, 500, 8500, 0);
+        let mut current = make_single_cpu_sample(1100, 600, 8700, 0);
+
+        current.task_stats = TaskStats {
+            total_tasks: 100,
+            total_threads: 500,
+            running_threads: 5,
+        };
+
+        let snapshot = Snapshot::compute(&current, &previous);
+
+        assert_eq!(snapshot.task_stats.total_tasks, 100);
+        assert_eq!(snapshot.task_stats.total_threads, 500);
+        assert_eq!(snapshot.task_stats.running_threads, 5);
+    }
+
+    proptest! {
+        #[test]
+        fn prop_task_stats_threads_ge_tasks(
+            total_tasks in 0u32..10_000u32,
+            extra_threads in 0u32..100_000u32,
+            running in 0u32..100_000u32,
+        ) {
+            let total_threads = total_tasks + extra_threads;
+            let running_threads = running.min(total_threads);
+
+            let task_stats = TaskStats {
+                total_tasks,
+                total_threads,
+                running_threads,
+            };
+
+            prop_assert!(task_stats.total_threads >= task_stats.total_tasks,
+                "total_threads ({}) must be >= total_tasks ({})",
+                task_stats.total_threads, task_stats.total_tasks);
+
+            prop_assert!(task_stats.running_threads <= task_stats.total_threads,
+                "running_threads ({}) must be <= total_threads ({})",
+                task_stats.running_threads, task_stats.total_threads);
         }
     }
 }

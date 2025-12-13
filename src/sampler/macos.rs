@@ -30,6 +30,9 @@ const VM_SWAPUSAGE: i32 = 5;
 const HW_MEMSIZE: i32 = 24;
 const HOST_VM_INFO64: i32 = 4;
 
+const PROC_ALL_PIDS: u32 = 1;
+const PROC_PIDTASKINFO: i32 = 4;
+
 // swap storage
 #[repr(C)]
 struct xsw_usage {
@@ -70,6 +73,28 @@ struct vm_statistics64 {
 
 type vm_size_t = usize;
 
+#[repr(C)]
+struct proc_taskinfo {
+    pti_virtual_size: u64,
+    pti_resident_size: u64,
+    pti_total_user: u64,
+    pti_total_system: u64,
+    pti_threads_user: u64,
+    pti_threads_system: u64,
+    pti_policy: i32,
+    pti_faults: i32,
+    pti_pageins: i32,
+    pti_cow_faults: i32,
+    pti_messages_sent: i32,
+    pti_messages_received: i32,
+    pti_syscalls_mach: i32,
+    pti_syscalls_unix: i32,
+    pti_csw: i32,
+    pti_threadnum: i32,
+    pti_numrunning: i32,
+    pti_priority: i32,
+}
+
 unsafe extern "C" {
     fn mach_host_self() -> host_t;
 
@@ -89,6 +114,10 @@ unsafe extern "C" {
         host_info: *mut vm_statistics64,
         count: *mut mach_msg_type_number_t,
     ) -> kern_return_t;
+
+    fn proc_listpids(type_: u32, typeinfo: u32, buffer: *mut c_void, buffersize: i32) -> i32;
+
+    fn proc_pidinfo(pid: i32, flavor: i32, arg: u64, buffer: *mut c_void, buffersize: i32) -> i32;
 }
 
 pub struct MacOsSampler {
@@ -165,6 +194,7 @@ impl KernelInterface for MachKernel {
             let boot_info = self.get_boot_info()?;
             let load_average = self.get_load_average()?;
             let memory_stats = self.get_memory_stats()?;
+            let task_stats = self.get_task_stats().unwrap_or_default();
 
             Ok(RawSample {
                 cpu_count: processor_count as usize,
@@ -172,6 +202,7 @@ impl KernelInterface for MachKernel {
                 boot_info,
                 load_average,
                 memory_stats,
+                task_stats,
             })
         }
     }
@@ -282,5 +313,106 @@ impl KernelInterface for MachKernel {
                 swap_used_bytes: swap_info.xsu_used,
             })
         }
+    }
+
+    fn get_task_stats(&self) -> Result<crate::model::TaskStats, i32> {
+        unsafe {
+            let buffer_size = proc_listpids(PROC_ALL_PIDS, 0, ptr::null_mut(), 0);
+            if buffer_size <= 0 {
+                return Err(buffer_size);
+            }
+
+            let num_pids = buffer_size / mem::size_of::<i32>() as i32;
+            let mut pids: Vec<i32> = vec![0; num_pids as usize];
+
+            let result = proc_listpids(
+                PROC_ALL_PIDS,
+                0,
+                pids.as_mut_ptr() as *mut c_void,
+                buffer_size,
+            );
+            if result <= 0 {
+                return Err(result);
+            }
+
+            let actual_count = result / mem::size_of::<i32>() as i32;
+            pids.truncate(actual_count as usize);
+
+            let mut total_tasks = 0u32;
+            let mut total_threads = 0u32;
+            let mut running_threads = 0u32;
+
+            for &pid in &pids {
+                if pid <= 0 {
+                    continue;
+                }
+
+                let mut task_info: proc_taskinfo = mem::zeroed();
+                let result = proc_pidinfo(
+                    pid,
+                    PROC_PIDTASKINFO,
+                    0,
+                    &mut task_info as *mut _ as *mut c_void,
+                    mem::size_of::<proc_taskinfo>() as i32,
+                );
+
+                if result <= 0 {
+                    continue;
+                }
+
+                total_tasks += 1;
+                total_threads += task_info.pti_threadnum as u32;
+                running_threads += task_info.pti_numrunning as u32;
+            }
+
+            Ok(crate::model::TaskStats {
+                total_tasks,
+                total_threads,
+                running_threads,
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_task_stats_returns_valid_data() {
+        let kernel = MachKernel;
+        let result = kernel.get_task_stats();
+
+        assert!(result.is_ok(), "get_task_stats should succeed");
+
+        let stats = result.unwrap();
+
+        assert!(stats.total_tasks > 0, "should have at least some processes");
+        assert!(stats.total_threads > 0, "should have at least some threads");
+        assert!(stats.total_threads >= stats.total_tasks,
+            "total_threads ({}) should be >= total_tasks ({})",
+            stats.total_threads, stats.total_tasks);
+        assert!(stats.running_threads <= stats.total_threads,
+            "running_threads ({}) should be <= total_threads ({})",
+            stats.running_threads, stats.total_threads);
+    }
+
+    #[test]
+    fn test_get_task_stats_consistent_across_calls() {
+        let kernel = MachKernel;
+
+        let result1 = kernel.get_task_stats();
+        let result2 = kernel.get_task_stats();
+
+        assert!(result1.is_ok());
+        assert!(result2.is_ok());
+
+        let stats1 = result1.unwrap();
+        let stats2 = result2.unwrap();
+
+        let diff = (stats1.total_tasks as i32 - stats2.total_tasks as i32).abs();
+        assert!(diff < 100,
+            "task count should be relatively stable between calls (diff: {})",
+            diff);
     }
 }
