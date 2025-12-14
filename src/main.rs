@@ -8,7 +8,7 @@ use sampler::{PlatformSampler as Sampler, Sampler as _};
 use std::io::Result;
 use std::time::{Duration, Instant};
 
-const SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
+const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 
 fn main() -> Result<()> {
     let mut terminal = ratatui::init();
