@@ -192,57 +192,6 @@ impl Snapshot {
             task_stats: current.task_stats,
         }
     }
-
-    pub fn render(&self) {
-        println!("\n=== System Monitor ===");
-        println!(
-            "Tasks: {}, {} thr; {} running",
-            self.task_stats.total_tasks,
-            self.task_stats.total_threads,
-            self.task_stats.running_threads
-        );
-        println!(
-            "Uptime: {}d {:02}h:{:02}m:{:02}s  Load: {:.2} {:.2} {:.2}",
-            self.uptime.days,
-            self.uptime.hours,
-            self.uptime.minutes,
-            self.uptime.seconds,
-            self.load_average.one_min,
-            self.load_average.five_min,
-            self.load_average.fifteen_min
-        );
-        println!();
-
-        println!(
-            "Memory: {:.2}G / {:.2}G ({:.1}%) - Active: {:.2}G, Wired: {:.2}G, Compressed: {:.2}G",
-            self.memory_stats.used_gb(),
-            self.memory_stats.total_gb(),
-            self.memory_stats.used_percent(),
-            self.memory_stats.active_gb(),
-            self.memory_stats.wired_gb(),
-            self.memory_stats.compressed_gb()
-        );
-
-        if self.memory_stats.swap_total_bytes > 0 {
-            println!(
-                "Swap:   {:.2}G / {:.2}G ({:.1}%)",
-                self.memory_stats.swap_used_gb(),
-                self.memory_stats.swap_total_gb(),
-                self.memory_stats.swap_used_percent()
-            );
-        } else {
-            println!("Swap:   No swap configured");
-        }
-        println!();
-
-        for (i, cpu) in self.cpu_usage.iter().enumerate() {
-            println!(
-                "CPU {:2}: User={:5.2}%, System={:5.2}%, Idle={:5.2}%, Nice={:5.2}%",
-                i, cpu.user_percent, cpu.system_percent, cpu.idle_percent, cpu.nice_percent
-            );
-        }
-        println!("=========================\n");
-    }
 }
 
 #[cfg(test)]
