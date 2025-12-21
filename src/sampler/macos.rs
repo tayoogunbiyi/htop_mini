@@ -13,7 +13,8 @@ use mach::traps::mach_task_self;
 use mach::vm::mach_vm_deallocate;
 use mach::vm_types::{mach_vm_address_t, mach_vm_size_t, natural_t};
 
-use libc::{CTL_HW, CTL_KERN, CTL_VM, KERN_BOOTTIME, c_void, getloadavg, sysctl, timeval};
+use libc::{CTL_HW, CTL_KERN, CTL_VM, KERN_BOOTTIME};
+use libc::{c_char, c_void, getloadavg, getpwuid, sysctl, timeval, uid_t};
 
 type host_t = mach_port_t;
 type host_flavor_t = i32;
@@ -31,7 +32,8 @@ const HW_MEMSIZE: i32 = 24;
 const HOST_VM_INFO64: i32 = 4;
 
 const PROC_ALL_PIDS: u32 = 1;
-const PROC_PIDTASKINFO: i32 = 4;
+const PROC_PIDTASKALLINFO: i32 = 2;
+const PROC_PIDPATHINFO_MAXSIZE: usize = 4096;
 
 // swap storage
 #[repr(C)]
@@ -95,6 +97,38 @@ struct proc_taskinfo {
     pti_priority: i32,
 }
 
+#[repr(C)]
+struct proc_bsdinfo {
+    pbi_flags: u32,
+    pbi_status: u32,
+    pbi_xstatus: u32,
+    pbi_pid: u32,
+    pbi_ppid: u32,
+    pbi_uid: u32,
+    pbi_gid: u32,
+    pbi_ruid: u32,
+    pbi_rgid: u32,
+    pbi_svuid: u32,
+    pbi_svgid: u32,
+    pbi_rfu1: u32,
+    pbi_comm: [u8; 16],
+    pbi_name: [u8; 32],
+    pbi_nfiles: u32,
+    pbi_pgid: u32,
+    pbi_pjobc: u32,
+    pbi_e_tdev: u32,
+    pbi_e_tpgid: u32,
+    pbi_nice: i32,
+    pbi_start_tvsec: u64,
+    pbi_start_tvusec: u64,
+}
+
+#[repr(C)]
+struct proc_taskallinfo {
+    pbsd: proc_bsdinfo,
+    ptinfo: proc_taskinfo,
+}
+
 unsafe extern "C" {
     fn mach_host_self() -> host_t;
 
@@ -118,6 +152,8 @@ unsafe extern "C" {
     fn proc_listpids(type_: u32, typeinfo: u32, buffer: *mut c_void, buffersize: i32) -> i32;
 
     fn proc_pidinfo(pid: i32, flavor: i32, arg: u64, buffer: *mut c_void, buffersize: i32) -> i32;
+
+    fn proc_pidpath(pid: i32, buffer: *mut c_void, buffersize: u32) -> i32;
 }
 
 pub struct MacOsSampler {
@@ -345,23 +381,69 @@ impl KernelInterface for MachKernel {
                     continue;
                 }
 
-                let mut task_info: proc_taskinfo = mem::zeroed();
+                let mut all_info: proc_taskallinfo = mem::zeroed();
                 let result = proc_pidinfo(
                     pid,
-                    PROC_PIDTASKINFO,
+                    PROC_PIDTASKALLINFO,
                     0,
-                    &mut task_info as *mut _ as *mut c_void,
-                    mem::size_of::<proc_taskinfo>() as i32,
+                    &mut all_info as *mut _ as *mut c_void,
+                    mem::size_of::<proc_taskallinfo>() as i32,
                 );
 
                 if result <= 0 {
                     continue;
                 }
 
+                let mut path_buffer = vec![0u8; PROC_PIDPATHINFO_MAXSIZE];
+                let path_result = proc_pidpath(
+                    pid,
+                    path_buffer.as_mut_ptr() as *mut c_void,
+                    PROC_PIDPATHINFO_MAXSIZE as u32,
+                );
+
+                let command = if path_result > 0 {
+                    let path_len = path_buffer
+                        .iter()
+                        .position(|&b| b == 0) // find the first 0 byte since this is a C null terminated string.
+                        .unwrap_or(path_result as usize);
+                    String::from_utf8_lossy(&path_buffer[..path_len]).to_string()
+                } else {
+                    String::new()
+                };
+
+                let uid = all_info.pbsd.pbi_uid;
+                let user = {
+                    let pw = getpwuid(uid as uid_t);
+                    if !pw.is_null() && !(*pw).pw_name.is_null() {
+                        std::ffi::CStr::from_ptr((*pw).pw_name as *const c_char)
+                            .to_string_lossy()
+                            .to_string()
+                    } else {
+                        uid.to_string()
+                    }
+                };
+
+                let state = match all_info.pbsd.pbi_status {
+                    2 => crate::model::ProcessState::Running,     // SRUN
+                    3 => crate::model::ProcessState::Sleeping,    // SSLEEP
+                    4 => crate::model::ProcessState::Stopped,     // SSTOP
+                    5 => crate::model::ProcessState::Zombie,      // SZOMB
+                    _ => crate::model::ProcessState::Unknown,     // SIDL or other
+                };
+
                 processes.push(crate::model::RawProcessInfo {
                     pid,
-                    thread_count: task_info.pti_threadnum as u32,
-                    running_threads: task_info.pti_numrunning as u32,
+                    uid: all_info.pbsd.pbi_uid,
+                    user,
+                    priority: all_info.ptinfo.pti_priority,
+                    nice: all_info.pbsd.pbi_nice,
+                    virtual_size: all_info.ptinfo.pti_virtual_size,
+                    resident_size: all_info.ptinfo.pti_resident_size,
+                    state,
+                    cpu_time_ns: all_info.ptinfo.pti_total_user + all_info.ptinfo.pti_total_system,
+                    thread_count: all_info.ptinfo.pti_threadnum as u32,
+                    running_threads: all_info.ptinfo.pti_numrunning as u32,
+                    command,
                 });
             }
 
@@ -387,14 +469,20 @@ mod tests {
 
         let total_threads: u32 = processes.iter().map(|p| p.thread_count).sum();
         assert!(total_threads > 0, "should have at least some threads");
-        assert!(total_threads >= processes.len() as u32,
+        assert!(
+            total_threads >= processes.len() as u32,
             "total_threads ({}) should be >= total_tasks ({})",
-            total_threads, processes.len());
+            total_threads,
+            processes.len()
+        );
 
         let running_threads: u32 = processes.iter().map(|p| p.running_threads).sum();
-        assert!(running_threads <= total_threads,
+        assert!(
+            running_threads <= total_threads,
             "running_threads ({}) should be <= total_threads ({})",
-            running_threads, total_threads);
+            running_threads,
+            total_threads
+        );
     }
 
     #[test]
@@ -411,8 +499,10 @@ mod tests {
         let processes2 = result2.unwrap();
 
         let diff = (processes1.len() as i32 - processes2.len() as i32).abs();
-        assert!(diff < 100,
+        assert!(
+            diff < 100,
             "process count should be relatively stable between calls (diff: {})",
-            diff);
+            diff
+        );
     }
 }

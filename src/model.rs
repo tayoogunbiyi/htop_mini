@@ -25,11 +25,29 @@ pub struct TaskStats {
     pub running_threads: u32,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum ProcessState {
+    Running,
+    Sleeping,
+    Stopped,
+    Zombie,
+    Unknown,
+}
+
 #[derive(Debug, Clone)]
 pub struct RawProcessInfo {
     pub pid: i32,
+    pub uid: u32,
+    pub user: String,
+    pub priority: i32,
+    pub nice: i32,
+    pub virtual_size: u64,
+    pub resident_size: u64,
+    pub state: ProcessState,
+    pub cpu_time_ns: u64,
     pub thread_count: u32,
     pub running_threads: u32,
+    pub command: String,
 }
 
 #[derive(Debug, Clone)]
@@ -282,6 +300,23 @@ mod tests {
         let previous = make_single_cpu_sample(u32::MAX - 50, 100, 100, 0);
         let current = make_single_cpu_sample(100, 200, 150, 0);
         (previous, current)
+    }
+
+    fn make_test_process(pid: i32, thread_count: u32, running_threads: u32) -> RawProcessInfo {
+        RawProcessInfo {
+            pid,
+            uid: if pid == 1 { 0 } else { 501 },
+            user: if pid == 1 { "root".to_string() } else { "user".to_string() },
+            priority: pid * 10,
+            nice: 0,
+            virtual_size: (pid as u64) * 1024 * 1024,
+            resident_size: (pid as u64) * 512 * 1024,
+            state: if running_threads > 0 { ProcessState::Running } else { ProcessState::Sleeping },
+            cpu_time_ns: (pid as u64) * 1_000_000,
+            thread_count,
+            running_threads,
+            command: format!("/bin/proc{}", pid),
+        }
     }
 
     fn assert_float_eq(a: f64, b: f64, epsilon: f64) {
@@ -597,21 +632,9 @@ mod tests {
         let mut current = make_single_cpu_sample(1100, 600, 8700, 0);
 
         current.processes = vec![
-            RawProcessInfo {
-                pid: 1,
-                thread_count: 10,
-                running_threads: 1,
-            },
-            RawProcessInfo {
-                pid: 2,
-                thread_count: 20,
-                running_threads: 2,
-            },
-            RawProcessInfo {
-                pid: 3,
-                thread_count: 30,
-                running_threads: 3,
-            },
+            make_test_process(1, 10, 1),
+            make_test_process(2, 20, 2),
+            make_test_process(3, 30, 3),
         ];
 
         let snapshot = Snapshot::compute(&current, &previous);
