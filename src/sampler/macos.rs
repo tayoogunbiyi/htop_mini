@@ -194,7 +194,7 @@ impl KernelInterface for MachKernel {
             let boot_info = self.get_boot_info()?;
             let load_average = self.get_load_average()?;
             let memory_stats = self.get_memory_stats()?;
-            let task_stats = self.get_task_stats().unwrap_or_default();
+            let processes = self.get_processes().unwrap_or_default();
 
             Ok(RawSample {
                 cpu_count: processor_count as usize,
@@ -202,7 +202,7 @@ impl KernelInterface for MachKernel {
                 boot_info,
                 load_average,
                 memory_stats,
-                task_stats,
+                processes,
             })
         }
     }
@@ -315,7 +315,7 @@ impl KernelInterface for MachKernel {
         }
     }
 
-    fn get_task_stats(&self) -> Result<crate::model::TaskStats, i32> {
+    fn get_processes(&self) -> Result<Vec<crate::model::RawProcessInfo>, i32> {
         unsafe {
             let buffer_size = proc_listpids(PROC_ALL_PIDS, 0, ptr::null_mut(), 0);
             if buffer_size <= 0 {
@@ -338,9 +338,7 @@ impl KernelInterface for MachKernel {
             let actual_count = result / mem::size_of::<i32>() as i32;
             pids.truncate(actual_count as usize);
 
-            let mut total_tasks = 0u32;
-            let mut total_threads = 0u32;
-            let mut running_threads = 0u32;
+            let mut processes = Vec::new();
 
             for &pid in &pids {
                 if pid <= 0 {
@@ -360,16 +358,14 @@ impl KernelInterface for MachKernel {
                     continue;
                 }
 
-                total_tasks += 1;
-                total_threads += task_info.pti_threadnum as u32;
-                running_threads += task_info.pti_numrunning as u32;
+                processes.push(crate::model::RawProcessInfo {
+                    pid,
+                    thread_count: task_info.pti_threadnum as u32,
+                    running_threads: task_info.pti_numrunning as u32,
+                });
             }
 
-            Ok(crate::model::TaskStats {
-                total_tasks,
-                total_threads,
-                running_threads,
-            })
+            Ok(processes)
         }
     }
 }
@@ -379,40 +375,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_get_task_stats_returns_valid_data() {
+    fn test_get_processes_returns_valid_data() {
         let kernel = MachKernel;
-        let result = kernel.get_task_stats();
+        let result = kernel.get_processes();
 
-        assert!(result.is_ok(), "get_task_stats should succeed");
+        assert!(result.is_ok(), "get_processes should succeed");
 
-        let stats = result.unwrap();
+        let processes = result.unwrap();
 
-        assert!(stats.total_tasks > 0, "should have at least some processes");
-        assert!(stats.total_threads > 0, "should have at least some threads");
-        assert!(stats.total_threads >= stats.total_tasks,
+        assert!(!processes.is_empty(), "should have at least some processes");
+
+        let total_threads: u32 = processes.iter().map(|p| p.thread_count).sum();
+        assert!(total_threads > 0, "should have at least some threads");
+        assert!(total_threads >= processes.len() as u32,
             "total_threads ({}) should be >= total_tasks ({})",
-            stats.total_threads, stats.total_tasks);
-        assert!(stats.running_threads <= stats.total_threads,
+            total_threads, processes.len());
+
+        let running_threads: u32 = processes.iter().map(|p| p.running_threads).sum();
+        assert!(running_threads <= total_threads,
             "running_threads ({}) should be <= total_threads ({})",
-            stats.running_threads, stats.total_threads);
+            running_threads, total_threads);
     }
 
     #[test]
-    fn test_get_task_stats_consistent_across_calls() {
+    fn test_get_processes_consistent_across_calls() {
         let kernel = MachKernel;
 
-        let result1 = kernel.get_task_stats();
-        let result2 = kernel.get_task_stats();
+        let result1 = kernel.get_processes();
+        let result2 = kernel.get_processes();
 
         assert!(result1.is_ok());
         assert!(result2.is_ok());
 
-        let stats1 = result1.unwrap();
-        let stats2 = result2.unwrap();
+        let processes1 = result1.unwrap();
+        let processes2 = result2.unwrap();
 
-        let diff = (stats1.total_tasks as i32 - stats2.total_tasks as i32).abs();
+        let diff = (processes1.len() as i32 - processes2.len() as i32).abs();
         assert!(diff < 100,
-            "task count should be relatively stable between calls (diff: {})",
+            "process count should be relatively stable between calls (diff: {})",
             diff);
     }
 }

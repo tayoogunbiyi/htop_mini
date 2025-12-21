@@ -1,5 +1,5 @@
 use super::{Sampler, SampleError};
-use crate::model::{BootInfo, LoadAverage, MemoryStats, RawSample, TaskStats};
+use crate::model::{BootInfo, LoadAverage, MemoryStats, RawSample};
 
 pub struct LinuxSampler {}
 
@@ -34,7 +34,7 @@ impl Sampler for LinuxSampler {
                 swap_total_bytes: 0,
                 swap_used_bytes: 0,
             },
-            task_stats: TaskStats::default(),
+            processes: vec![],
         })
     }
 }

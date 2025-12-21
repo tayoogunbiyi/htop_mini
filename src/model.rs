@@ -5,13 +5,30 @@ pub struct RawSample {
     pub boot_info: BootInfo,
     pub load_average: LoadAverage,
     pub memory_stats: MemoryStats,
-    pub task_stats: TaskStats,
+    pub processes: Vec<RawProcessInfo>,
+}
+
+impl RawSample {
+    pub fn task_stats(&self) -> TaskStats {
+        TaskStats {
+            total_tasks: self.processes.len() as u32,
+            total_threads: self.processes.iter().map(|p| p.thread_count).sum(),
+            running_threads: self.processes.iter().map(|p| p.running_threads).sum(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TaskStats {
     pub total_tasks: u32,
     pub total_threads: u32,
+    pub running_threads: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct RawProcessInfo {
+    pub pid: i32,
+    pub thread_count: u32,
     pub running_threads: u32,
 }
 
@@ -189,7 +206,7 @@ impl Snapshot {
             uptime,
             load_average: current.load_average,
             memory_stats: current.memory_stats,
-            task_stats: current.task_stats,
+            task_stats: current.task_stats(),
         }
     }
 }
@@ -232,7 +249,7 @@ mod tests {
                 fifteen_min: 2.0,
             },
             memory_stats: make_memory_stats(),
-            task_stats: TaskStats::default(),
+            processes: vec![],
         }
     }
 
@@ -257,7 +274,7 @@ mod tests {
                 fifteen_min: 2.0,
             },
             memory_stats: make_memory_stats(),
-            task_stats: TaskStats::default(),
+            processes: vec![],
         }
     }
 
@@ -575,21 +592,33 @@ mod tests {
     }
 
     #[test]
-    fn test_snapshot_passes_through_task_stats() {
+    fn test_snapshot_derives_task_stats_from_processes() {
         let previous = make_single_cpu_sample(1000, 500, 8500, 0);
         let mut current = make_single_cpu_sample(1100, 600, 8700, 0);
 
-        current.task_stats = TaskStats {
-            total_tasks: 100,
-            total_threads: 500,
-            running_threads: 5,
-        };
+        current.processes = vec![
+            RawProcessInfo {
+                pid: 1,
+                thread_count: 10,
+                running_threads: 1,
+            },
+            RawProcessInfo {
+                pid: 2,
+                thread_count: 20,
+                running_threads: 2,
+            },
+            RawProcessInfo {
+                pid: 3,
+                thread_count: 30,
+                running_threads: 3,
+            },
+        ];
 
         let snapshot = Snapshot::compute(&current, &previous);
 
-        assert_eq!(snapshot.task_stats.total_tasks, 100);
-        assert_eq!(snapshot.task_stats.total_threads, 500);
-        assert_eq!(snapshot.task_stats.running_threads, 5);
+        assert_eq!(snapshot.task_stats.total_tasks, 3);
+        assert_eq!(snapshot.task_stats.total_threads, 60);
+        assert_eq!(snapshot.task_stats.running_threads, 6);
     }
 
     proptest! {
