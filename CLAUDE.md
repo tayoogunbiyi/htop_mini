@@ -63,5 +63,4 @@ The codebase follows a layered architecture with clear separation between data c
 - This project uses Cargo edition 2024
 - Avoid OBVIOUS comments, docstrings, and explanations when writing code
 - When asked to build out a feature, always first write a detailed plan of how you plan to implement it to a file named <feature_name>.plan.md in the .claude directory
-
-
+- When you need to use OS / Kernel constants, always look up the relevant header files in /usr/include (for macOS) to find the constants.
