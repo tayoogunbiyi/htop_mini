@@ -11,7 +11,13 @@ impl LinuxSampler {
 
 impl Sampler for LinuxSampler {
     fn sample(&mut self) -> Result<RawSample, SampleError> {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
         Ok(RawSample {
+            timestamp,
             cpu_count: 0,
             cpu_ticks: vec![],
             boot_info: BootInfo {

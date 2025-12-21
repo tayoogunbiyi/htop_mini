@@ -232,7 +232,13 @@ impl KernelInterface for MachKernel {
             let memory_stats = self.get_memory_stats()?;
             let processes = self.get_processes().unwrap_or_default();
 
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+
             Ok(RawSample {
+                timestamp,
                 cpu_count: processor_count as usize,
                 cpu_ticks,
                 boot_info,

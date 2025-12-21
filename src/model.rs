@@ -1,5 +1,6 @@
 #[derive(Debug, Clone)]
 pub struct RawSample {
+    pub timestamp: u64,
     pub cpu_count: usize,
     pub cpu_ticks: Vec<CpuTicks>,
     pub boot_info: BootInfo,
@@ -47,6 +48,21 @@ pub struct RawProcessInfo {
     pub cpu_time_ns: u64,
     pub thread_count: u32,
     pub running_threads: u32,
+    pub command: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProcessInfo {
+    pub pid: i32,
+    pub user: String,
+    pub priority: i32,
+    pub nice: i32,
+    pub virtual_size: u64,
+    pub resident_size: u64,
+    pub state: ProcessState,
+    pub cpu_percent: f64,
+    pub mem_percent: f64,
+    pub cpu_time_secs: f64,
     pub command: String,
 }
 
@@ -140,6 +156,7 @@ pub struct Snapshot {
     pub load_average: LoadAverage,
     pub memory_stats: MemoryStats,
     pub task_stats: TaskStats,
+    pub processes: Vec<ProcessInfo>,
 }
 
 #[derive(Debug, Clone)]
@@ -218,6 +235,56 @@ impl Snapshot {
 
         let uptime = Uptime::from_seconds(uptime_secs);
 
+        let prev_processes: std::collections::HashMap<i32, &RawProcessInfo> = previous
+            .processes
+            .iter()
+            .map(|p| (p.pid, p))
+            .collect();
+
+        let total_memory = current.memory_stats.total_memory_bytes;
+
+        let sample_interval_secs = current.timestamp.saturating_sub(previous.timestamp);
+        let sample_interval_ns = sample_interval_secs * 1_000_000_000;
+
+        let mut processes: Vec<ProcessInfo> = current
+            .processes
+            .iter()
+            .map(|curr_proc| {
+                let cpu_percent = if let Some(prev_proc) = prev_processes.get(&curr_proc.pid) {
+                    let delta_ns = curr_proc.cpu_time_ns.saturating_sub(prev_proc.cpu_time_ns);
+                    if sample_interval_ns > 0 {
+                        (delta_ns as f64 / sample_interval_ns as f64) * 100.0
+                    } else {
+                        0.0
+                    }
+                } else {
+                    0.0
+                };
+
+                let mem_percent = if total_memory > 0 {
+                    (curr_proc.resident_size as f64 / total_memory as f64) * 100.0
+                } else {
+                    0.0
+                };
+
+                ProcessInfo {
+                    pid: curr_proc.pid,
+                    user: curr_proc.user.clone(),
+                    priority: curr_proc.priority,
+                    nice: curr_proc.nice,
+                    virtual_size: curr_proc.virtual_size,
+                    resident_size: curr_proc.resident_size,
+                    state: curr_proc.state,
+                    cpu_percent,
+                    mem_percent,
+                    cpu_time_secs: curr_proc.cpu_time_ns as f64 / 1_000_000_000.0,
+                    command: curr_proc.command.clone(),
+                }
+            })
+            .collect();
+
+        processes.sort_by(|a, b| b.cpu_percent.partial_cmp(&a.cpu_percent).unwrap());
+
         Snapshot {
             cpu_count: current.cpu_count,
             cpu_usage,
@@ -225,6 +292,7 @@ impl Snapshot {
             load_average: current.load_average,
             memory_stats: current.memory_stats,
             task_stats: current.task_stats(),
+            processes,
         }
     }
 }
@@ -251,6 +319,7 @@ mod tests {
 
     fn make_single_cpu_sample(user: u32, system: u32, idle: u32, nice: u32) -> RawSample {
         RawSample {
+            timestamp: 1000000,
             cpu_count: 1,
             cpu_ticks: vec![CpuTicks {
                 user,
@@ -273,6 +342,7 @@ mod tests {
 
     fn make_sample(cpu_count: usize, ticks: Vec<[u32; 4]>) -> RawSample {
         RawSample {
+            timestamp: 1000000,
             cpu_count,
             cpu_ticks: ticks
                 .iter()
@@ -297,8 +367,10 @@ mod tests {
     }
 
     fn make_wraparound_sample() -> (RawSample, RawSample) {
-        let previous = make_single_cpu_sample(u32::MAX - 50, 100, 100, 0);
-        let current = make_single_cpu_sample(100, 200, 150, 0);
+        let mut previous = make_single_cpu_sample(u32::MAX - 50, 100, 100, 0);
+        let mut current = make_single_cpu_sample(100, 200, 150, 0);
+        previous.timestamp = 1000000;
+        current.timestamp = 1000001;
         (previous, current)
     }
 
