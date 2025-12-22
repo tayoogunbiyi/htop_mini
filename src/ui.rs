@@ -218,11 +218,11 @@ fn render_uptime_line(snapshot: &Snapshot) -> Line<'static> {
     let u = &snapshot.uptime;
     let uptime_str = if u.days > 0 {
         format!(
-            "{} days, {:02}:{:02}:{:02}",
+            "{}d {}h {}m {}s",
             u.days, u.hours, u.minutes, u.seconds
         )
     } else {
-        format!("{:02}:{:02}:{:02}", u.hours, u.minutes, u.seconds)
+        format!("{}h {}m {}s", u.hours, u.minutes, u.seconds)
     };
     Line::from(vec![
         Span::styled("Uptime: ", Style::default().fg(Color::Cyan)),
