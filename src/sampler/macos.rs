@@ -429,12 +429,25 @@ impl KernelInterface for MachKernel {
                     }
                 };
 
+                // On macOS, pbi_status (p_stat) is unreliable for detecting running vs sleeping.
+                // It returns SRUN (2) for nearly all processes regardless of actual state.
+                // See: https://github.com/giampaolo/psutil/issues/2675
+                //
+                // The correct approach (used by htop and other monitoring tools):
+                // - Use pbi_status only for zombie/stopped detection (values 4 & 5)
+                // - Use pti_numrunning to determine running vs sleeping:
+                //   * pti_numrunning > 0 means the process has actively running threads
+                //   * pti_numrunning = 0 means all threads are sleeping
                 let state = match all_info.pbsd.pbi_status {
-                    2 => crate::model::ProcessState::Running,     // SRUN
-                    3 => crate::model::ProcessState::Sleeping,    // SSLEEP
-                    4 => crate::model::ProcessState::Stopped,     // SSTOP
-                    5 => crate::model::ProcessState::Zombie,      // SZOMB
-                    _ => crate::model::ProcessState::Unknown,     // SIDL or other
+                    5 => crate::model::ProcessState::Zombie,  // SZOMB
+                    4 => crate::model::ProcessState::Stopped, // SSTOP
+                    _ => {
+                        if all_info.ptinfo.pti_numrunning > 0 {
+                            crate::model::ProcessState::Running
+                        } else {
+                            crate::model::ProcessState::Sleeping
+                        }
+                    }
                 };
 
                 processes.push(crate::model::RawProcessInfo {
