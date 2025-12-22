@@ -35,6 +35,18 @@ pub enum ProcessState {
     Unknown,
 }
 
+impl ProcessState {
+    pub fn as_char(self) -> char {
+        match self {
+            ProcessState::Running => 'R',
+            ProcessState::Sleeping => 'S',
+            ProcessState::Stopped => 'T',
+            ProcessState::Zombie => 'Z',
+            ProcessState::Unknown => '?',
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RawProcessInfo {
     pub pid: i32,

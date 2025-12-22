@@ -3,12 +3,42 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
 };
 
-use crate::model::Snapshot;
+use crate::model::{ProcessState, Snapshot};
 
 const BAR_CHAR: &str = "|";
+
+fn format_bytes(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = 1024 * KIB;
+    const GIB: u64 = 1024 * MIB;
+
+    if bytes >= GIB {
+        format!("{:.1}G", bytes as f64 / GIB as f64)
+    } else if bytes >= MIB {
+        format!("{}M", bytes / MIB)
+    } else if bytes >= KIB {
+        format!("{}K", bytes / KIB)
+    } else {
+        format!("{}B", bytes)
+    }
+}
+
+fn format_time(secs: f64) -> String {
+    let total_secs = secs as u64;
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let seconds = total_secs % 60;
+    let hundredths = ((secs - total_secs as f64) * 100.0) as u64;
+
+    if hours > 0 {
+        format!("{}:{:02}:{:02}", hours, minutes, seconds)
+    } else {
+        format!("{:02}:{:02}.{:02}", minutes, seconds, hundredths)
+    }
+}
 
 pub fn render(f: &mut Frame, snapshot: Option<&Snapshot>) {
     match snapshot {
@@ -25,10 +55,21 @@ fn draw_loading(f: &mut Frame) {
 }
 
 fn draw(f: &mut Frame, snapshot: &Snapshot) {
-    let chunks = Layout::vertical([Constraint::Min(4), Constraint::Length(1)]).split(f.area());
+    let cpu_count = snapshot.cpu_count;
+    let cols_count = 3;
+    let cpu_rows = (cpu_count + cols_count - 1) / cols_count;
+    let meters_height = (cpu_rows + 5) as u16; // 5 = Mem, Swap, Tasks, Load, Uptime
+
+    let chunks = Layout::vertical([
+        Constraint::Length(meters_height),
+        Constraint::Min(5),
+        Constraint::Length(1),
+    ])
+    .split(f.area());
 
     draw_meters(f, snapshot, chunks[0]);
-    draw_help(f, chunks[1]);
+    draw_process_table(f, snapshot, chunks[1]);
+    draw_help(f, chunks[2]);
 }
 
 fn draw_meters(f: &mut Frame, snapshot: &Snapshot, area: Rect) {
@@ -187,6 +228,63 @@ fn render_uptime_line(snapshot: &Snapshot) -> Line<'static> {
         Span::styled("Uptime: ", Style::default().fg(Color::Cyan)),
         Span::raw(uptime_str),
     ])
+}
+
+fn draw_process_table(f: &mut Frame, snapshot: &Snapshot, area: Rect) {
+    let header_cells = ["PID", "USER", "PRI", "NI", "VIRT", "RES", "S", "CPU%", "MEM%", "TIME+", "Command"]
+        .iter()
+        .map(|h| Cell::from(*h).style(Style::default().fg(Color::Black).bg(Color::Cyan)));
+    let header = Row::new(header_cells).height(1);
+
+    let rows = snapshot.processes.iter().map(|proc| {
+        let state_style = match proc.state {
+            ProcessState::Running => Style::default().fg(Color::Green),
+            ProcessState::Zombie => Style::default().fg(Color::Red),
+            _ => Style::default(),
+        };
+
+        Row::new(vec![
+            Cell::from(format!("{:>7}", proc.pid)),
+            Cell::from(format!("{:<10}", truncate(&proc.user, 10))),
+            Cell::from(format!("{:>3}", proc.priority)),
+            Cell::from(format!("{:>3}", proc.nice)),
+            Cell::from(format!("{:>6}", format_bytes(proc.virtual_size))),
+            Cell::from(format!("{:>6}", format_bytes(proc.resident_size))),
+            Cell::from(format!("{}", proc.state.as_char())).style(state_style),
+            Cell::from(format!("{:>5.1}", proc.cpu_percent)),
+            Cell::from(format!("{:>5.1}", proc.mem_percent)),
+            Cell::from(format!("{:>9}", format_time(proc.cpu_time_secs))),
+            Cell::from(proc.command.clone()),
+        ])
+    });
+
+    let widths = [
+        Constraint::Length(7),  // PID
+        Constraint::Length(10), // USER
+        Constraint::Length(4),  // PRI
+        Constraint::Length(4),  // NI
+        Constraint::Length(7),  // VIRT
+        Constraint::Length(7),  // RES
+        Constraint::Length(1),  // S
+        Constraint::Length(6),  // CPU%
+        Constraint::Length(6),  // MEM%
+        Constraint::Length(9),  // TIME+
+        Constraint::Min(10),    // Command
+    ];
+
+    let table = Table::new(rows, widths)
+        .header(header)
+        .row_highlight_style(Style::default().bg(Color::DarkGray));
+
+    f.render_widget(table, area);
+}
+
+fn truncate(s: &str, max_len: usize) -> &str {
+    if s.len() > max_len {
+        &s[..max_len]
+    } else {
+        s
+    }
 }
 
 fn draw_help(f: &mut Frame, area: Rect) {
