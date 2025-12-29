@@ -69,12 +69,12 @@ cargo run --release
 
 htop_mini follows a layered architecture with clear separation between data collection, computation, and presentation:
 
+```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │     Sampler     │────▶│      Model      │────▶│       UI        │
 │ (macOS / Linux) │     │   (Snapshot)    │     │    (ratatui)    │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
-
-
+```
 
 ## Development
 
