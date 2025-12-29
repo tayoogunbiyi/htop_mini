@@ -31,11 +31,103 @@ const VM_SWAPUSAGE: i32 = 5;
 const HW_MEMSIZE: i32 = 24;
 const HOST_VM_INFO64: i32 = 4;
 
-const PROC_ALL_PIDS: u32 = 1;
-const PROC_PIDTASKALLINFO: i32 = 2;
+const PROC_PIDTASKINFO: i32 = 4;
 const PROC_PIDPATHINFO_MAXSIZE: usize = 4096;
 
-// swap storage
+const KERN_PROC: i32 = 14;
+const KERN_PROC_ALL: i32 = 0;
+
+const SZOMB: i8 = 5;
+const SSTOP: i8 = 4;
+
+#[repr(C)]
+struct extern_proc {
+    p_un: [u8; 16],
+    p_vmspace: *mut c_void,
+    p_sigacts: *mut c_void,
+    p_flag: i32,
+    p_stat: i8,
+    p_pid: i32,
+    p_oppid: i32,
+    p_dupfd: i32,
+    user_stack: *mut c_void,
+    exit_thread: *mut c_void,
+    p_debugger: i32,
+    sigwait: i32,
+    p_estcpu: u32,
+    p_cpticks: i32,
+    p_pctcpu: u32,
+    p_wchan: *mut c_void,
+    p_wmesg: *mut c_char,
+    p_swtime: u32,
+    p_slptime: u32,
+    p_realtimer: [u8; 32],
+    p_rtime: timeval,
+    p_uticks: u64,
+    p_sticks: u64,
+    p_iticks: u64,
+    p_traceflag: i32,
+    p_tracep: *mut c_void,
+    p_siglist: i32,
+    p_textvp: *mut c_void,
+    p_holdcnt: i32,
+    p_sigmask: u32,
+    p_sigignore: u32,
+    p_sigcatch: u32,
+    p_priority: u8,
+    p_usrpri: u8,
+    p_nice: i8,
+    p_comm: [u8; 17],
+    p_pgrp: *mut c_void,
+    p_addr: *mut c_void,
+    p_xstat: u16,
+    p_acflag: u16,
+    p_ru: *mut c_void,
+}
+
+#[repr(C)]
+struct eproc {
+    e_paddr: *mut c_void,
+    e_sess: *mut c_void,
+    e_pcred: [u8; 104],
+    e_ucred: eproc_ucred,
+    _pad1: [u8; 4],
+    e_vm: [u8; 64],
+    e_ppid: i32,
+    e_pgid: i32,
+    e_jobc: i16,
+    _pad2: i16,
+    e_tdev: i32,
+    e_tpgid: i32,
+    _pad3: i32,
+    e_tsess: *mut c_void,
+    e_wmesg: [u8; 8],
+    e_xsize: i32,
+    e_xrssize: i16,
+    e_xccount: i16,
+    e_xswrss: i16,
+    _pad4: i16,
+    e_flag: i32,
+    e_login: [u8; 12],
+    e_spare: [i32; 4],
+    _pad5: i32,
+}
+
+#[repr(C)]
+struct eproc_ucred {
+    cr_ref: i32,
+    cr_uid: uid_t,
+    cr_ngroups: i16,
+    _pad: i16,
+    cr_groups: [u32; 16],
+}
+
+#[repr(C)]
+struct kinfo_proc {
+    kp_proc: extern_proc,
+    kp_eproc: eproc,
+}
+
 #[repr(C)]
 struct xsw_usage {
     xsu_total: u64,
@@ -97,38 +189,6 @@ struct proc_taskinfo {
     pti_priority: i32,
 }
 
-#[repr(C)]
-struct proc_bsdinfo {
-    pbi_flags: u32,
-    pbi_status: u32,
-    pbi_xstatus: u32,
-    pbi_pid: u32,
-    pbi_ppid: u32,
-    pbi_uid: u32,
-    pbi_gid: u32,
-    pbi_ruid: u32,
-    pbi_rgid: u32,
-    pbi_svuid: u32,
-    pbi_svgid: u32,
-    pbi_rfu1: u32,
-    pbi_comm: [u8; 16],
-    pbi_name: [u8; 32],
-    pbi_nfiles: u32,
-    pbi_pgid: u32,
-    pbi_pjobc: u32,
-    pbi_e_tdev: u32,
-    pbi_e_tpgid: u32,
-    pbi_nice: i32,
-    pbi_start_tvsec: u64,
-    pbi_start_tvusec: u64,
-}
-
-#[repr(C)]
-struct proc_taskallinfo {
-    pbsd: proc_bsdinfo,
-    ptinfo: proc_taskinfo,
-}
-
 unsafe extern "C" {
     fn mach_host_self() -> host_t;
 
@@ -148,8 +208,6 @@ unsafe extern "C" {
         host_info: *mut vm_statistics64,
         count: *mut mach_msg_type_number_t,
     ) -> kern_return_t;
-
-    fn proc_listpids(type_: u32, typeinfo: u32, buffer: *mut c_void, buffersize: i32) -> i32;
 
     fn proc_pidinfo(pid: i32, flavor: i32, arg: u64, buffer: *mut c_void, buffersize: i32) -> i32;
 
@@ -218,9 +276,6 @@ impl KernelInterface for MachKernel {
                 });
             }
 
-            // CRITICAL: Must call mach_vm_deallocate to prevent memory leaks
-            // The Mach kernel API allocates memory that must be manually freed
-            // Verify no leaks with: cargo instruments --template Leaks
             mach_vm_deallocate(
                 mach_task_self(),
                 processor_info as mach_vm_address_t,
@@ -359,65 +414,50 @@ impl KernelInterface for MachKernel {
 
     fn get_processes(&self) -> Result<Vec<crate::model::RawProcessInfo>, i32> {
         unsafe {
-            let buffer_size = proc_listpids(PROC_ALL_PIDS, 0, ptr::null_mut(), 0);
-            if buffer_size <= 0 {
-                return Err(buffer_size);
-            }
+            let mut mib = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0];
+            let mut size: usize = 0;
 
-            let num_pids = buffer_size / mem::size_of::<i32>() as i32;
-            let mut pids: Vec<i32> = vec![0; num_pids as usize];
-
-            let result = proc_listpids(
-                PROC_ALL_PIDS,
+            let result = sysctl(
+                mib.as_mut_ptr(),
+                3,
+                ptr::null_mut(),
+                &mut size,
+                ptr::null_mut(),
                 0,
-                pids.as_mut_ptr() as *mut c_void,
-                buffer_size,
             );
-            if result <= 0 {
+            if result != 0 {
                 return Err(result);
             }
 
-            let actual_count = result / mem::size_of::<i32>() as i32;
-            pids.truncate(actual_count as usize);
+            size += 16 * mem::size_of::<kinfo_proc>();
+            let count = size / mem::size_of::<kinfo_proc>();
+            let mut kprocs: Vec<kinfo_proc> = Vec::with_capacity(count);
+            kprocs.set_len(count);
 
-            let mut processes = Vec::new();
+            let result = sysctl(
+                mib.as_mut_ptr(),
+                3,
+                kprocs.as_mut_ptr() as *mut c_void,
+                &mut size,
+                ptr::null_mut(),
+                0,
+            );
+            if result != 0 {
+                return Err(result);
+            }
 
-            for &pid in &pids {
+            let actual_count = size / mem::size_of::<kinfo_proc>();
+            kprocs.truncate(actual_count);
+
+            let mut processes = Vec::with_capacity(actual_count);
+
+            for kp in &kprocs {
+                let pid = kp.kp_proc.p_pid;
                 if pid <= 0 {
                     continue;
                 }
 
-                let mut all_info: proc_taskallinfo = mem::zeroed();
-                let result = proc_pidinfo(
-                    pid,
-                    PROC_PIDTASKALLINFO,
-                    0,
-                    &mut all_info as *mut _ as *mut c_void,
-                    mem::size_of::<proc_taskallinfo>() as i32,
-                );
-
-                if result <= 0 {
-                    continue;
-                }
-
-                let mut path_buffer = vec![0u8; PROC_PIDPATHINFO_MAXSIZE];
-                let path_result = proc_pidpath(
-                    pid,
-                    path_buffer.as_mut_ptr() as *mut c_void,
-                    PROC_PIDPATHINFO_MAXSIZE as u32,
-                );
-
-                let command = if path_result > 0 {
-                    let path_len = path_buffer
-                        .iter()
-                        .position(|&b| b == 0) // find the first 0 byte since this is a C null terminated string.
-                        .unwrap_or(path_result as usize);
-                    String::from_utf8_lossy(&path_buffer[..path_len]).to_string()
-                } else {
-                    String::new()
-                };
-
-                let uid = all_info.pbsd.pbi_uid;
+                let uid = kp.kp_eproc.e_ucred.cr_uid;
                 let user = {
                     let pw = getpwuid(uid as uid_t);
                     if !pw.is_null() && !(*pw).pw_name.is_null() {
@@ -429,20 +469,49 @@ impl KernelInterface for MachKernel {
                     }
                 };
 
-                // On macOS, pbi_status (p_stat) is unreliable for detecting running vs sleeping.
-                // It returns SRUN (2) for nearly all processes regardless of actual state.
-                // See: https://github.com/giampaolo/psutil/issues/2675
-                //
-                // The correct approach (used by htop and other monitoring tools):
-                // - Use pbi_status only for zombie/stopped detection (values 4 & 5)
-                // - Use pti_numrunning to determine running vs sleeping:
-                //   * pti_numrunning > 0 means the process has actively running threads
-                //   * pti_numrunning = 0 means all threads are sleeping
-                let state = match all_info.pbsd.pbi_status {
-                    5 => crate::model::ProcessState::Zombie,  // SZOMB
-                    4 => crate::model::ProcessState::Stopped, // SSTOP
+                let comm_len = kp
+                    .kp_proc
+                    .p_comm
+                    .iter()
+                    .position(|&b| b == 0)
+                    .unwrap_or(kp.kp_proc.p_comm.len());
+                let comm = String::from_utf8_lossy(&kp.kp_proc.p_comm[..comm_len]).to_string();
+
+                let mut taskinfo: proc_taskinfo = mem::zeroed();
+                let task_result = proc_pidinfo(
+                    pid,
+                    PROC_PIDTASKINFO,
+                    0,
+                    &mut taskinfo as *mut _ as *mut c_void,
+                    mem::size_of::<proc_taskinfo>() as i32,
+                );
+                let has_task_info = task_result > 0;
+
+                let command = if has_task_info {
+                    let mut path_buffer = vec![0u8; PROC_PIDPATHINFO_MAXSIZE];
+                    let path_result = proc_pidpath(
+                        pid,
+                        path_buffer.as_mut_ptr() as *mut c_void,
+                        PROC_PIDPATHINFO_MAXSIZE as u32,
+                    );
+                    if path_result > 0 {
+                        let path_len = path_buffer
+                            .iter()
+                            .position(|&b| b == 0)
+                            .unwrap_or(path_result as usize);
+                        String::from_utf8_lossy(&path_buffer[..path_len]).to_string()
+                    } else {
+                        comm.clone()
+                    }
+                } else {
+                    comm.clone()
+                };
+
+                let state = match kp.kp_proc.p_stat {
+                    SZOMB => crate::model::ProcessState::Zombie,
+                    SSTOP => crate::model::ProcessState::Stopped,
                     _ => {
-                        if all_info.ptinfo.pti_numrunning > 0 {
+                        if has_task_info && taskinfo.pti_numrunning > 0 {
                             crate::model::ProcessState::Running
                         } else {
                             crate::model::ProcessState::Sleeping
@@ -450,18 +519,32 @@ impl KernelInterface for MachKernel {
                     }
                 };
 
+                let (virtual_size, resident_size, cpu_time_ns, thread_count, running_threads, priority) =
+                    if has_task_info {
+                        (
+                            taskinfo.pti_virtual_size,
+                            taskinfo.pti_resident_size,
+                            taskinfo.pti_total_user + taskinfo.pti_total_system,
+                            taskinfo.pti_threadnum as u32,
+                            taskinfo.pti_numrunning as u32,
+                            taskinfo.pti_priority,
+                        )
+                    } else {
+                        (0, 0, 0, 1, 0, kp.kp_proc.p_priority as i32)
+                    };
+
                 processes.push(crate::model::RawProcessInfo {
                     pid,
-                    uid: all_info.pbsd.pbi_uid,
+                    uid,
                     user,
-                    priority: all_info.ptinfo.pti_priority,
-                    nice: all_info.pbsd.pbi_nice,
-                    virtual_size: all_info.ptinfo.pti_virtual_size,
-                    resident_size: all_info.ptinfo.pti_resident_size,
+                    priority,
+                    nice: kp.kp_proc.p_nice as i32,
+                    virtual_size,
+                    resident_size,
                     state,
-                    cpu_time_ns: all_info.ptinfo.pti_total_user + all_info.ptinfo.pti_total_system,
-                    thread_count: all_info.ptinfo.pti_threadnum as u32,
-                    running_threads: all_info.ptinfo.pti_numrunning as u32,
+                    cpu_time_ns,
+                    thread_count,
+                    running_threads,
                     command,
                 });
             }
@@ -523,5 +606,12 @@ mod tests {
             "process count should be relatively stable between calls (diff: {})",
             diff
         );
+    }
+
+    #[test]
+    fn test_struct_sizes() {
+        assert_eq!(std::mem::size_of::<kinfo_proc>(), 648, "kinfo_proc size mismatch");
+        assert_eq!(std::mem::size_of::<extern_proc>(), 296, "extern_proc size mismatch");
+        assert_eq!(std::mem::size_of::<eproc>(), 352, "eproc size mismatch");
     }
 }
