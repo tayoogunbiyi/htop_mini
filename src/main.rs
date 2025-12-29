@@ -2,10 +2,16 @@ mod model;
 mod sampler;
 mod ui;
 
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::{
+    cursor::{Hide, Show},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
+    execute,
+    terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, SetTitle},
+};
 use model::Snapshot;
+use ratatui::{Terminal, backend::CrosstermBackend};
 use sampler::{PlatformSampler as Sampler, Sampler as _};
-use std::io::Result;
+use std::io::{self, Write, stdout};
 use std::time::{Duration, Instant};
 
 fn parse_args() -> Duration {
@@ -44,15 +50,56 @@ fn print_help() {
     println!("    -h, --help           Print help information");
 }
 
-fn main() -> Result<()> {
+fn setup_terminal() -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
+    let mut stdout = stdout();
+
+    terminal::enable_raw_mode()?;
+
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        Clear(ClearType::All),
+        Clear(ClearType::Purge),
+        Hide,
+        EnableMouseCapture,
+        SetTitle("htop_mini")
+    )?;
+    stdout.flush()?;
+
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+    terminal.clear()?;
+
+    Ok(terminal)
+}
+
+fn restore_terminal() {
+    let mut stdout = stdout();
+
+    let _ = execute!(
+        stdout,
+        DisableMouseCapture,
+        Clear(ClearType::All),
+        Show,
+        LeaveAlternateScreen
+    );
+    let _ = stdout.flush();
+    let _ = terminal::disable_raw_mode();
+    let _ = println!();
+}
+
+fn main() -> io::Result<()> {
     let sample_interval = parse_args();
-    let mut terminal = ratatui::init();
+    let mut terminal = setup_terminal()?;
     let result = run(&mut terminal, sample_interval);
-    ratatui::restore();
+    restore_terminal();
     result
 }
 
-fn run(terminal: &mut ratatui::DefaultTerminal, sample_interval: Duration) -> Result<()> {
+fn run(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    sample_interval: Duration,
+) -> io::Result<()> {
     let mut sampler = Sampler::new();
     let mut previous_sample = sampler.sample().ok();
     let mut last_sample_time = Instant::now();
