@@ -3,7 +3,7 @@
 A lightweight, terminal-based system monitoring tool written in Rust, inspired by [htop](https://htop.dev/).
 
 ![Rust](https://img.shields.io/badge/rust-2024-orange.svg)
-![Platform](https://img.shields.io/badge/platform-macOS-blue.svg)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
 ![htop_mini demo](demo.gif)
@@ -35,7 +35,7 @@ htop_mini is a minimal yet functional system resource monitor that provides real
 | Platform | Status |
 |----------|--------|
 | macOS    | Fully supported |
-| Linux    | Planned |
+| Linux    | Fully supported |
 
 ## Installation
 
@@ -85,4 +85,4 @@ cargo test                    # Run all tests
 ```
 
 ## Roadmap
-- [ ] Linux support via /proc filesystem
+- [x] Linux support via /proc filesystem
