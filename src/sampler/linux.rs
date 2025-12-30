@@ -55,11 +55,20 @@ impl KernelInterface for LinuxKernel {
     }
 
     fn get_load_average(&self) -> Result<LoadAverage, i32> {
-        Ok(LoadAverage {
-            one_min: 0.0,
-            five_min: 0.0,
-            fifteen_min: 0.0,
-        })
+        unsafe {
+            let mut loadavg = [0.0f64; 3];
+            let result = libc::getloadavg(loadavg.as_mut_ptr(), 3);
+
+            if result != 3 {
+                return Err(-1);
+            }
+
+            Ok(LoadAverage {
+                one_min: loadavg[0],
+                five_min: loadavg[1],
+                fifteen_min: loadavg[2],
+            })
+        }
     }
 
     fn get_memory_stats(&self) -> Result<MemoryStats, i32> {
