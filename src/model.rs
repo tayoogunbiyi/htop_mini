@@ -78,7 +78,7 @@ pub struct ProcessInfo {
     pub command: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CpuTicks {
     pub user: u32,
     pub system: u32,
