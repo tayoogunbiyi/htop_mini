@@ -72,23 +72,60 @@ impl KernelInterface for LinuxKernel {
     }
 
     fn get_memory_stats(&self) -> Result<MemoryStats, i32> {
-        Ok(MemoryStats {
-            total_memory_bytes: 0,
-            active_bytes: 0,
-            inactive_bytes: 0,
-            wired_bytes: 0,
-            compressed_bytes: 0,
-            free_bytes: 0,
-            purgeable_bytes: 0,
-            page_size: 0,
-            swap_total_bytes: 0,
-            swap_used_bytes: 0,
-        })
+        let content = std::fs::read_to_string("/proc/meminfo").map_err(|_| -1)?;
+        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as u64 };
+        parse_meminfo_content(&content, page_size)
     }
 
     fn get_processes(&self) -> Result<Vec<RawProcessInfo>, i32> {
         Ok(vec![])
     }
+}
+
+fn parse_meminfo_content(content: &str, page_size: u64) -> Result<MemoryStats, i32> {
+    let mut mem_total_kb = 0u64;
+    let mut mem_free_kb = 0u64;
+    let mut active_kb = 0u64;
+    let mut inactive_kb = 0u64;
+    let mut buffers_kb = 0u64;
+    let mut slab_kb = 0u64;
+    let mut swap_total_kb = 0u64;
+    let mut swap_free_kb = 0u64;
+
+    for line in content.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 2 {
+            let value = parts[1].parse::<u64>().unwrap_or(0);
+            match parts[0] {
+                "MemTotal:" => mem_total_kb = value,
+                "MemFree:" => mem_free_kb = value,
+                "Active:" => active_kb = value,
+                "Inactive:" => inactive_kb = value,
+                "Buffers:" => buffers_kb = value,
+                "Slab:" => slab_kb = value,
+                "SwapTotal:" => swap_total_kb = value,
+                "SwapFree:" => swap_free_kb = value,
+                _ => {}
+            }
+        }
+    }
+
+    if mem_total_kb == 0 {
+        return Err(-1);
+    }
+
+    Ok(MemoryStats {
+        total_memory_bytes: mem_total_kb * 1024,
+        active_bytes: active_kb * 1024,
+        inactive_bytes: inactive_kb * 1024,
+        wired_bytes: slab_kb * 1024,
+        compressed_bytes: 0, // Linux doesn't have direct equivalent
+        free_bytes: mem_free_kb * 1024,
+        purgeable_bytes: buffers_kb * 1024,
+        page_size,
+        swap_total_bytes: swap_total_kb * 1024,
+        swap_used_bytes: (swap_total_kb.saturating_sub(swap_free_kb)) * 1024,
+    })
 }
 
 fn parse_boot_time_content(content: &str) -> Result<BootInfo, i32> {
@@ -196,6 +233,39 @@ procs_blocked 0
     fn test_parse_boot_time_content_missing() {
         let sample = "cpu  12345 678 9012\nprocesses 12345\n";
         let result = parse_boot_time_content(sample);
+        assert_eq!(result, Err(-1));
+    }
+
+    #[test]
+    fn test_parse_meminfo_content() {
+        let sample = r#"MemTotal:       16384000 kB
+MemFree:         8192000 kB
+MemAvailable:   12000000 kB
+Buffers:          512000 kB
+Cached:          3000000 kB
+Active:          4000000 kB
+Inactive:        2000000 kB
+Slab:             500000 kB
+SwapTotal:       8000000 kB
+SwapFree:        7500000 kB
+"#;
+
+        let result = parse_meminfo_content(sample, 4096).unwrap();
+
+        assert_eq!(result.total_memory_bytes, 16384000 * 1024);
+        assert_eq!(result.free_bytes, 8192000 * 1024);
+        assert_eq!(result.active_bytes, 4000000 * 1024);
+        assert_eq!(result.inactive_bytes, 2000000 * 1024);
+        assert_eq!(result.wired_bytes, 500000 * 1024); // Slab
+        assert_eq!(result.purgeable_bytes, 512000 * 1024); // Buffers
+        assert_eq!(result.swap_total_bytes, 8000000 * 1024);
+        assert_eq!(result.swap_used_bytes, 500000 * 1024); // 8000000 - 7500000
+        assert_eq!(result.page_size, 4096);
+    }
+
+    #[test]
+    fn test_parse_meminfo_content_empty() {
+        let result = parse_meminfo_content("", 4096);
         assert_eq!(result, Err(-1));
     }
 }

@@ -98,7 +98,7 @@ pub struct LoadAverage {
     pub fifteen_min: f64,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MemoryStats {
     pub total_memory_bytes: u64,
     pub active_bytes: u64,
