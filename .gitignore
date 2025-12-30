@@ -2,3 +2,4 @@
 .DS_Store
 proptest-regressions
 .claude/*.md
+linux_scripts/*
