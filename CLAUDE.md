@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-htop_mini is a lightweight, terminal-based system monitoring tool written in Rust. It displays real-time CPU usage (per-core), memory statistics, task/thread counts, load averages, and uptime using a TUI powered by ratatui and crossterm. Currently fully functional on macOS; Linux support is in progress.
+htop_mini is a lightweight, terminal-based system monitoring tool written in Rust. It displays real-time CPU usage (per-core), memory statistics, task/thread counts, load averages, and uptime using a TUI powered by ratatui and crossterm. Fully functional on both macOS and Linux.
 
 ## Build and Run Commands
 
@@ -34,19 +34,19 @@ The codebase follows a layered architecture with clear separation between data c
 
 ### Core Modules
 - **model.rs**: Defines the data model with two key types:
-  - `RawSample`: Raw system metrics collected from the kernel (CPU ticks, boot time, load average, memory stats, task stats)
-  - `Snapshot`: Computed metrics derived from two `RawSample`s (CPU usage percentages, uptime). The `Snapshot::compute()` function calculates deltas between samples to determine usage percentages, handling u32 wraparound correctly.
+  - `RawSample`: Raw system metrics collected from the kernel (CPU ticks, boot time, load average, memory stats, task stats, processes). Timestamps stored as u128 nanoseconds to support sub-second sampling intervals.
+  - `Snapshot`: Computed metrics derived from two `RawSample`s (CPU usage percentages, uptime, process CPU/memory percentages). The `Snapshot::compute()` function calculates deltas between samples to determine usage percentages, handling u64 wraparound correctly.
 
 - **sampler/**: Platform-specific system metric collection using a trait-based design:
   - `Sampler` trait: Defines the interface for collecting a `RawSample`
   - `PlatformSampler`: Type alias that resolves to `MacOsSampler` or `LinuxSampler` based on target OS
   - `KernelInterface` trait: Abstracts kernel system calls for testing
   - **macos.rs**: Implements macOS metric collection via Mach kernel APIs (host_processor_info, host_statistics64), sysctl, and proc_pidinfo.
-  - **linux.rs**: Stub implementation (not yet functional)
+  - **linux.rs**: Implements Linux metric collection via /proc filesystem (/proc/stat, /proc/meminfo, /proc/[pid]/*) and libc calls (getloadavg).
 
 - **ui.rs**: Terminal UI rendering with ratatui. Renders CPU bars (color-coded user/system), memory bars, swap, task stats, load average, and uptime.
 
-- **main.rs**: Event loop that samples every 1 second, handles keyboard input (q/Esc to quit), computes snapshots from consecutive samples, and triggers UI redraws.
+- **main.rs**: Event loop with configurable sampling interval (default 1 second, minimum 100ms via --interval flag), handles keyboard input (q/Esc to quit), computes snapshots from consecutive samples, and triggers UI redraws.
 
 ### Data Flow
 1. `PlatformSampler::sample()` calls platform-specific kernel interfaces to collect `RawSample`
@@ -57,7 +57,7 @@ The codebase follows a layered architecture with clear separation between data c
 ### Testing
 - Extensive unit tests in model.rs verify CPU usage calculations
 - Property-based tests using proptest ensure percentage calculations are always valid (0-100%, sum to 100%)
-- Tests cover edge cases: u32 wraparound, zero deltas, multiple CPUs
+- Tests cover edge cases: u64 wraparound, zero deltas, multiple CPUs, sub-second sampling intervals
 
 ## Important Notes
 - This project uses Cargo edition 2024
