@@ -50,7 +50,8 @@ impl KernelInterface for LinuxKernel {
     }
 
     fn get_boot_info(&self) -> Result<BootInfo, i32> {
-        Ok(BootInfo { boot_time_secs: 0 })
+        let content = std::fs::read_to_string("/proc/stat").map_err(|_| -1)?;
+        parse_boot_time_content(&content)
     }
 
     fn get_load_average(&self) -> Result<LoadAverage, i32> {
@@ -79,6 +80,19 @@ impl KernelInterface for LinuxKernel {
     fn get_processes(&self) -> Result<Vec<RawProcessInfo>, i32> {
         Ok(vec![])
     }
+}
+
+fn parse_boot_time_content(content: &str) -> Result<BootInfo, i32> {
+    for line in content.lines() {
+        if line.starts_with("btime ") {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let boot_time = parts[1].parse::<u64>().map_err(|_| -1)?;
+                return Ok(BootInfo { boot_time_secs: boot_time });
+            }
+        }
+    }
+    Err(-1)
 }
 
 fn parse_cpu_stat_content(content: &str) -> Result<Vec<CpuTicks>, i32> {
@@ -159,6 +173,20 @@ procs_blocked 0
     fn test_parse_cpu_stat_content_no_per_cpu_lines() {
         let sample = "cpu  12345 678 9012 345678 901 234 567 0 0 0\n";
         let result = parse_cpu_stat_content(sample);
+        assert_eq!(result, Err(-1));
+    }
+
+    #[test]
+    fn test_parse_boot_time_content() {
+        let sample = "cpu  12345 678 9012\nbtime 1703123456\nprocesses 12345\n";
+        let result = parse_boot_time_content(sample).unwrap();
+        assert_eq!(result.boot_time_secs, 1703123456);
+    }
+
+    #[test]
+    fn test_parse_boot_time_content_missing() {
+        let sample = "cpu  12345 678 9012\nprocesses 12345\n";
+        let result = parse_boot_time_content(sample);
         assert_eq!(result, Err(-1));
     }
 }

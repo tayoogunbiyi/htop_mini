@@ -86,7 +86,7 @@ pub struct CpuTicks {
     pub nice: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BootInfo {
     pub boot_time_secs: u64,
 }
