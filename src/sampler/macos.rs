@@ -263,10 +263,10 @@ impl KernelInterface for MachKernel {
 
             for i in 0..processor_count as usize {
                 let offset = i * CPU_STATE_MAX;
-                let user = cpu_info[offset + CPU_STATE_USER] as u32;
-                let system = cpu_info[offset + CPU_STATE_SYSTEM] as u32;
-                let idle = cpu_info[offset + CPU_STATE_IDLE] as u32;
-                let nice = cpu_info[offset + CPU_STATE_NICE] as u32;
+                let user = cpu_info[offset + CPU_STATE_USER] as u64;
+                let system = cpu_info[offset + CPU_STATE_SYSTEM] as u64;
+                let idle = cpu_info[offset + CPU_STATE_IDLE] as u64;
+                let nice = cpu_info[offset + CPU_STATE_NICE] as u64;
 
                 cpu_ticks.push(CpuTicks {
                     user,

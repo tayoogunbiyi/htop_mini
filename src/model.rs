@@ -80,10 +80,10 @@ pub struct ProcessInfo {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CpuTicks {
-    pub user: u32,
-    pub system: u32,
-    pub idle: u32,
-    pub nice: u32,
+    pub user: u64,
+    pub system: u64,
+    pub idle: u64,
+    pub nice: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -218,8 +218,7 @@ impl Snapshot {
                 let delta_idle = curr.idle.wrapping_sub(prev.idle);
                 let delta_nice = curr.nice.wrapping_sub(prev.nice);
 
-                let total_delta =
-                    delta_user as u64 + delta_system as u64 + delta_idle as u64 + delta_nice as u64;
+                let total_delta = delta_user + delta_system + delta_idle + delta_nice;
 
                 if total_delta > 0 {
                     CpuUsage {
@@ -329,7 +328,7 @@ mod tests {
         }
     }
 
-    fn make_single_cpu_sample(user: u32, system: u32, idle: u32, nice: u32) -> RawSample {
+    fn make_single_cpu_sample(user: u64, system: u64, idle: u64, nice: u64) -> RawSample {
         RawSample {
             timestamp: 1000000,
             cpu_count: 1,
@@ -352,7 +351,7 @@ mod tests {
         }
     }
 
-    fn make_sample(cpu_count: usize, ticks: Vec<[u32; 4]>) -> RawSample {
+    fn make_sample(cpu_count: usize, ticks: Vec<[u64; 4]>) -> RawSample {
         RawSample {
             timestamp: 1000000,
             cpu_count,
@@ -379,7 +378,7 @@ mod tests {
     }
 
     fn make_wraparound_sample() -> (RawSample, RawSample) {
-        let mut previous = make_single_cpu_sample(u32::MAX - 50, 100, 100, 0);
+        let mut previous = make_single_cpu_sample(u64::MAX - 50, 100, 100, 0);
         let mut current = make_single_cpu_sample(100, 200, 150, 0);
         previous.timestamp = 1000000;
         current.timestamp = 1000001;
@@ -542,9 +541,9 @@ mod tests {
             4,
             vec![
                 [1000, 500, 8500, 0],
-                [u32::MAX - 100, 200, 100, 0],
-                [500, u32::MAX - 50, 8500, 0],
-                [1500, 750, u32::MAX - 200, 0],
+                [u64::MAX - 100, 200, 100, 0],
+                [500, u64::MAX - 50, 8500, 0],
+                [1500, 750, u64::MAX - 200, 0],
             ],
         );
         let current = make_sample(
@@ -599,14 +598,14 @@ mod tests {
     proptest! {
         #[test]
         fn prop_percentages_sum_to_100_or_0(
-            prev_user in 0u32..u32::MAX/2,
-            prev_system in 0u32..u32::MAX/2,
-            prev_idle in 0u32..u32::MAX/2,
-            prev_nice in 0u32..u32::MAX/2,
-            delta_user in 0u32..1_000_000u32,
-            delta_system in 0u32..1_000_000u32,
-            delta_idle in 0u32..1_000_000u32,
-            delta_nice in 0u32..1_000_000u32,
+            prev_user in 0u64..u64::MAX/2,
+            prev_system in 0u64..u64::MAX/2,
+            prev_idle in 0u64..u64::MAX/2,
+            prev_nice in 0u64..u64::MAX/2,
+            delta_user in 0u64..1_000_000u64,
+            delta_system in 0u64..1_000_000u64,
+            delta_idle in 0u64..1_000_000u64,
+            delta_nice in 0u64..1_000_000u64,
         ) {
             let previous = make_single_cpu_sample(prev_user, prev_system, prev_idle, prev_nice);
             let current = make_single_cpu_sample(
@@ -628,14 +627,14 @@ mod tests {
 
         #[test]
         fn prop_all_percentages_in_valid_range(
-            prev_user in 0u32..u32::MAX/2,
-            prev_system in 0u32..u32::MAX/2,
-            prev_idle in 0u32..u32::MAX/2,
-            prev_nice in 0u32..u32::MAX/2,
-            delta_user in 0u32..1_000_000u32,
-            delta_system in 0u32..1_000_000u32,
-            delta_idle in 0u32..1_000_000u32,
-            delta_nice in 0u32..1_000_000u32,
+            prev_user in 0u64..u64::MAX/2,
+            prev_system in 0u64..u64::MAX/2,
+            prev_idle in 0u64..u64::MAX/2,
+            prev_nice in 0u64..u64::MAX/2,
+            delta_user in 0u64..1_000_000u64,
+            delta_system in 0u64..1_000_000u64,
+            delta_idle in 0u64..1_000_000u64,
+            delta_nice in 0u64..1_000_000u64,
         ) {
             let previous = make_single_cpu_sample(prev_user, prev_system, prev_idle, prev_nice);
             let current = make_single_cpu_sample(
@@ -658,19 +657,19 @@ mod tests {
         fn prop_multi_cpu_percentages_valid(
             cpu_count in 1usize..=16,
             prev_ticks in prop::collection::vec(
-                (0u32..u32::MAX/2, 0u32..u32::MAX/2, 0u32..u32::MAX/2, 0u32..u32::MAX/2),
+                (0u64..u64::MAX/2, 0u64..u64::MAX/2, 0u64..u64::MAX/2, 0u64..u64::MAX/2),
                 1..=16
             ),
             deltas in prop::collection::vec(
-                (0u32..1_000_000u32, 0u32..1_000_000u32, 0u32..1_000_000u32, 0u32..1_000_000u32),
+                (0u64..1_000_000u64, 0u64..1_000_000u64, 0u64..1_000_000u64, 0u64..1_000_000u64),
                 1..=16
             )
         ) {
             let len = cpu_count.min(prev_ticks.len()).min(deltas.len());
-            let prev_arr: Vec<[u32; 4]> = prev_ticks[..len].iter()
+            let prev_arr: Vec<[u64; 4]> = prev_ticks[..len].iter()
                 .map(|(u, s, i, n)| [*u, *s, *i, *n])
                 .collect();
-            let curr_arr: Vec<[u32; 4]> = prev_ticks[..len].iter()
+            let curr_arr: Vec<[u64; 4]> = prev_ticks[..len].iter()
                 .zip(deltas[..len].iter())
                 .map(|((u, s, i, n), (du, ds, di, dn))| [
                     u.wrapping_add(*du),

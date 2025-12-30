@@ -118,14 +118,14 @@ impl LinuxKernel {
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 // Format: cpuN user nice system idle iowait irq softirq [steal [guest [guest_nice]]]
                 if parts.len() >= 5 {
-                    let user = parts[1].parse::<u32>().unwrap_or(0);
-                    let nice = parts[2].parse::<u32>().unwrap_or(0);
-                    let system = parts[3].parse::<u32>().unwrap_or(0);
-                    let idle = parts[4].parse::<u32>().unwrap_or(0);
-                    let iowait = parts.get(5).and_then(|s| s.parse().ok()).unwrap_or(0u32);
-                    let irq = parts.get(6).and_then(|s| s.parse().ok()).unwrap_or(0u32);
-                    let softirq = parts.get(7).and_then(|s| s.parse().ok()).unwrap_or(0u32);
-                    let steal = parts.get(8).and_then(|s| s.parse().ok()).unwrap_or(0u32);
+                    let user = parts[1].parse::<u64>().unwrap_or(0);
+                    let nice = parts[2].parse::<u64>().unwrap_or(0);
+                    let system = parts[3].parse::<u64>().unwrap_or(0);
+                    let idle = parts[4].parse::<u64>().unwrap_or(0);
+                    let iowait = parts.get(5).and_then(|s| s.parse().ok()).unwrap_or(0u64);
+                    let irq = parts.get(6).and_then(|s| s.parse().ok()).unwrap_or(0u64);
+                    let softirq = parts.get(7).and_then(|s| s.parse().ok()).unwrap_or(0u64);
+                    let steal = parts.get(8).and_then(|s| s.parse().ok()).unwrap_or(0u64);
 
                     cpu_ticks.push(CpuTicks {
                         user,
