@@ -1,6 +1,10 @@
 use super::kernel_interface::KernelInterface;
 use super::{SampleError, Sampler};
-use crate::model::{BootInfo, CpuTicks, LoadAverage, MemoryStats, RawProcessInfo, RawSample};
+use crate::model::{
+    BootInfo, CpuTicks, LoadAverage, MemoryStats, ProcessState, RawProcessInfo, RawSample,
+};
+
+use libc::{c_char, getpwuid, uid_t};
 
 pub struct LinuxSampler {
     kernel: Box<dyn KernelInterface>,
@@ -78,7 +82,24 @@ impl KernelInterface for LinuxKernel {
     }
 
     fn get_processes(&self) -> Result<Vec<RawProcessInfo>, i32> {
-        Ok(vec![])
+        let mut processes = Vec::new();
+        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as u64 };
+        let clk_tck = unsafe { libc::sysconf(libc::_SC_CLK_TCK) as u64 };
+
+        let proc_dir = std::fs::read_dir("/proc").map_err(|_| -1)?;
+
+        for entry in proc_dir.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+
+            if let Ok(pid) = name_str.parse::<i32>() {
+                if let Ok(proc_info) = parse_process(pid, page_size, clk_tck) {
+                    processes.push(proc_info);
+                }
+            }
+        }
+
+        Ok(processes)
     }
 }
 
@@ -176,6 +197,149 @@ fn parse_cpu_stat_content(content: &str) -> Result<Vec<CpuTicks>, i32> {
     Ok(cpu_ticks)
 }
 
+fn parse_process(pid: i32, page_size: u64, clk_tck: u64) -> Result<RawProcessInfo, ()> {
+    let stat_path = format!("/proc/{}/stat", pid);
+    let stat_content = std::fs::read_to_string(&stat_path).map_err(|_| ())?;
+
+    // Parse /proc/[pid]/stat - handle comm field which can contain spaces and parens
+    let (comm, fields) = parse_stat_line(&stat_content)?;
+
+    // Fields after comm (0-indexed): state(0), ppid(1), pgrp(2), session(3), tty_nr(4),
+    // tpgid(5), flags(6), minflt(7), cminflt(8), majflt(9), cmajflt(10),
+    // utime(11), stime(12), cutime(13), cstime(14), priority(15), nice(16),
+    // num_threads(17), itrealvalue(18), starttime(19), vsize(20), rss(21), ...
+
+    let state = match fields.first().and_then(|s| s.chars().next()).unwrap_or('?') {
+        'R' => ProcessState::Running,
+        'S' | 'D' | 'I' => ProcessState::Sleeping,
+        'T' | 't' => ProcessState::Stopped,
+        'Z' => ProcessState::Zombie,
+        _ => ProcessState::Unknown,
+    };
+
+    let utime: u64 = fields.get(11).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let stime: u64 = fields.get(12).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let priority: i32 = fields.get(15).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let nice: i32 = fields.get(16).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let num_threads: u32 = fields.get(17).and_then(|s| s.parse().ok()).unwrap_or(1);
+    let vsize: u64 = fields.get(20).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let rss_pages: u64 = fields.get(21).and_then(|s| s.parse().ok()).unwrap_or(0);
+
+    let rss_bytes = rss_pages * page_size;
+
+    // Convert ticks to nanoseconds
+    let cpu_time_ns = if clk_tck > 0 {
+        ((utime + stime) * 1_000_000_000) / clk_tck
+    } else {
+        0
+    };
+
+    
+    let running_threads = count_running_threads(pid);
+
+    let uid = get_process_uid(pid);
+    let user = get_username(uid);
+    let command = get_cmdline(pid).unwrap_or_else(|| comm.clone());
+
+    Ok(RawProcessInfo {
+        pid,
+        uid,
+        user,
+        priority,
+        nice,
+        virtual_size: vsize,
+        resident_size: rss_bytes,
+        state,
+        cpu_time_ns,
+        thread_count: num_threads,
+        running_threads,
+        command,
+    })
+}
+
+fn parse_stat_line(content: &str) -> Result<(String, Vec<&str>), ()> {
+    let start = content.find('(').ok_or(())?;
+    let end = content.rfind(')').ok_or(())?;
+
+    if end <= start {
+        return Err(());
+    }
+
+    let comm = content[start + 1..end].to_string();
+    let rest = content.get(end + 2..).ok_or(())?; // Skip ") "
+    let fields: Vec<&str> = rest.split_whitespace().collect();
+
+    Ok((comm, fields))
+}
+
+fn count_running_threads(pid: i32) -> u32 {
+    let task_dir = format!("/proc/{}/task", pid);
+    let mut running = 0;
+
+    if let Ok(entries) = std::fs::read_dir(&task_dir) {
+        for entry in entries.flatten() {
+            let tid = entry.file_name();
+            let stat_path = format!("{}/{}/stat", task_dir, tid.to_string_lossy());
+            if let Ok(content) = std::fs::read_to_string(&stat_path) {
+                if let Some(end_paren) = content.rfind(')') {
+                    let after_comm = content.get(end_paren + 2..);
+                    if let Some(rest) = after_comm {
+                        if rest.starts_with('R') {
+                            running += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    running
+}
+
+fn get_process_uid(pid: i32) -> u32 {
+    let status_path = format!("/proc/{}/status", pid);
+    if let Ok(content) = std::fs::read_to_string(&status_path) {
+        for line in content.lines() {
+            if line.starts_with("Uid:") {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    return parts[1].parse().unwrap_or(0);
+                }
+            }
+        }
+    }
+    0
+}
+
+fn get_username(uid: u32) -> String {
+    unsafe {
+        let pw = getpwuid(uid as uid_t);
+        if !pw.is_null() && !(*pw).pw_name.is_null() {
+            std::ffi::CStr::from_ptr((*pw).pw_name as *const c_char)
+                .to_string_lossy()
+                .to_string()
+        } else {
+            uid.to_string()
+        }
+    }
+}
+
+fn get_cmdline(pid: i32) -> Option<String> {
+    let cmdline_path = format!("/proc/{}/cmdline", pid);
+    let content = std::fs::read(&cmdline_path).ok()?;
+
+    if content.is_empty() {
+        return None;
+    }
+
+    let cmdline: String = content
+        .into_iter()
+        .map(|b| if b == 0 { ' ' } else { b as char })
+        .collect();
+
+    Some(cmdline.trim().to_string())
+}
+
 impl LinuxKernel {
     fn parse_cpu_stat(&self) -> Result<Vec<CpuTicks>, i32> {
         let content = std::fs::read_to_string("/proc/stat").map_err(|_| -1)?;
@@ -267,5 +431,36 @@ SwapFree:        7500000 kB
     fn test_parse_meminfo_content_empty() {
         let result = parse_meminfo_content("", 4096);
         assert_eq!(result, Err(-1));
+    }
+
+    #[test]
+    fn test_parse_stat_line_simple() {
+        let stat = "1234 (bash) S 1233 1234 1234 0 -1 4194304 1000 0 0 0 100 50 0 0 20 0 1 0 12345 67890 1234 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0";
+        let (comm, fields) = parse_stat_line(stat).unwrap();
+        assert_eq!(comm, "bash");
+        assert_eq!(fields[0], "S"); // state
+        assert_eq!(fields[11], "100"); // utime
+        assert_eq!(fields[12], "50"); // stime
+        assert_eq!(fields[15], "20"); // priority
+        assert_eq!(fields[16], "0"); // nice
+        assert_eq!(fields[17], "1"); // num_threads
+    }
+
+    #[test]
+    fn test_parse_stat_line_with_spaces_in_comm() {
+        let stat = "5678 (Web Content) S 5677 5678 5678 0 -1 4194304 2000 0 0 0 200 100 0 0 20 0 5 0 54321 98765 4321 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0";
+        let (comm, fields) = parse_stat_line(stat).unwrap();
+        assert_eq!(comm, "Web Content");
+        assert_eq!(fields[0], "S");
+        assert_eq!(fields[17], "5"); // num_threads
+    }
+
+    #[test]
+    fn test_parse_stat_line_with_parens_in_comm() {
+        // Some processes have parentheses in their names like "(sd-pam)"
+        let stat = "9999 ((sd-pam)) S 1 9999 9999 0 -1 1077936192 100 0 0 0 10 5 0 0 20 0 1 0 98765 12345 500 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0";
+        let (comm, fields) = parse_stat_line(stat).unwrap();
+        assert_eq!(comm, "(sd-pam)");
+        assert_eq!(fields[0], "S");
     }
 }
