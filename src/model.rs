@@ -1,6 +1,6 @@
 #[derive(Debug, Clone)]
 pub struct RawSample {
-    pub timestamp: u64,
+    pub timestamp: u128,
     pub cpu_count: usize,
     pub cpu_ticks: Vec<CpuTicks>,
     pub boot_info: BootInfo,
@@ -254,8 +254,7 @@ impl Snapshot {
 
         let total_memory = current.memory_stats.total_memory_bytes;
 
-        let sample_interval_secs = current.timestamp.saturating_sub(previous.timestamp);
-        let sample_interval_ns = sample_interval_secs * 1_000_000_000;
+        let sample_interval_ns = current.timestamp.saturating_sub(previous.timestamp);
 
         let mut processes: Vec<ProcessInfo> = current
             .processes
@@ -330,7 +329,7 @@ mod tests {
 
     fn make_single_cpu_sample(user: u64, system: u64, idle: u64, nice: u64) -> RawSample {
         RawSample {
-            timestamp: 1000000,
+            timestamp: 1_000_000_000_000_000,
             cpu_count: 1,
             cpu_ticks: vec![CpuTicks {
                 user,
@@ -353,7 +352,7 @@ mod tests {
 
     fn make_sample(cpu_count: usize, ticks: Vec<[u64; 4]>) -> RawSample {
         RawSample {
-            timestamp: 1000000,
+            timestamp: 1_000_000_000_000_000,
             cpu_count,
             cpu_ticks: ticks
                 .iter()
@@ -380,8 +379,8 @@ mod tests {
     fn make_wraparound_sample() -> (RawSample, RawSample) {
         let mut previous = make_single_cpu_sample(u64::MAX - 50, 100, 100, 0);
         let mut current = make_single_cpu_sample(100, 200, 150, 0);
-        previous.timestamp = 1000000;
-        current.timestamp = 1000001;
+        previous.timestamp = 1_000_000_000_000_000;
+        current.timestamp = 1_000_000_000_000_000 + 1_000_000_000;
         (previous, current)
     }
 
@@ -725,6 +724,28 @@ mod tests {
         assert_eq!(snapshot.task_stats.total_tasks, 3);
         assert_eq!(snapshot.task_stats.total_threads, 60);
         assert_eq!(snapshot.task_stats.running_threads, 6);
+    }
+
+    #[test]
+    fn test_process_cpu_percent_with_subsecond_interval() {
+        let mut previous = make_single_cpu_sample(1000, 500, 8500, 0);
+        let mut current = make_single_cpu_sample(1100, 600, 8700, 0);
+
+        let proc1 = make_test_process(100, 1, 1);
+        previous.processes = vec![proc1.clone()];
+
+        let mut proc1_updated = proc1;
+        proc1_updated.cpu_time_ns += 50_000_000;
+        current.processes = vec![proc1_updated];
+
+        previous.timestamp = 1_000_000_000_000_000;
+        current.timestamp = 1_000_000_000_000_000 + 100_000_000;
+
+        let snapshot = Snapshot::compute(&current, &previous);
+
+        assert_eq!(snapshot.processes.len(), 1);
+        let proc = &snapshot.processes[0];
+        assert_float_eq(proc.cpu_percent, 50.0, 0.01);
     }
 
     proptest! {
