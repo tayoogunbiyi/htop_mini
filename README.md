@@ -84,5 +84,3 @@ htop_mini follows a layered architecture with clear separation between data coll
 cargo test                    # Run all tests
 ```
 
-## Roadmap
-- [x] Linux support via /proc filesystem
